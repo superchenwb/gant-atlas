@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "node --import=tsx dist/index.js",
+    "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "mcp": "node dist/index.js mcp serve"
