@@ -1,0 +1,52 @@
+{
+  "ibom": {
+    "产品": [
+      { "code": "A01S5", "name": "S50" },
+      { "code": "3ER", "name": "3ER" },
+      { "code": "A310", "name": "A310" },
+      { "code": "B01E4AA2", "name": "B01E4AA2" },
+      { "code": "FY", "name": "飞跃系列" }
+    ],
+    "产品大类": [
+      { "code": "467a4fb1786149bb8dc7613fe7083cdd", "name": "产品工程" },
+      { "code": "39c80c8e807142faa40be665eede649c", "name": "基础规范" },
+      { "code": "375c1a21a2fe44ecb4b14e1f8d199118", "name": "产品策划" }
+    ],
+    "工厂": [
+      { "code": "shanghai", "name": "上海工厂" },
+      { "code": "wuhu", "name": "武汉工厂" }
+    ],
+    "零件": [
+      { "code": "STANDARD", "name": "标准件" },
+      { "code": "CUSTOM", "name": "定制件" },
+      { "code": "SOFTWARE", "name": "软件件" }
+    ],
+    "人员": [
+      { "code": "e73121b1bb7c4843a79ce549664ed44f", "name": "admin" },
+      { "code": "f7f0b2faaa5a4bccae2e3d3c762752c7", "name": "周浩斌" },
+      { "code": "dbca86c9c30a4f72ab821e37d1c48ab9", "name": "邓银银" }
+    ]
+  },
+  "icost": {
+    "产品": [
+      { "code": "A01S5", "name": "S50" },
+      { "code": "3ER", "name": "3ER" },
+      { "code": "A310", "name": "A310" }
+    ],
+    "工厂": [
+      { "code": "shanghai", "name": "上海工厂" },
+      { "code": "wuhu", "name": "武汉工厂" }
+    ],
+    "零件": [
+      { "code": "STANDARD", "name": "标准件" },
+      { "code": "CUSTOM", "name": "定制件" }
+    ],
+    "供应商": [
+      { "code": "supplier_a", "name": "供应商A" },
+      { "code": "supplier_b", "name": "供应商B" }
+    ],
+    "人员": [
+      { "code": "e73121b1bb7c4843a79ce549664ed44f", "name": "admin" }
+    ]
+  }
+}

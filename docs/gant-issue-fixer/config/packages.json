@@ -1,0 +1,32 @@
+{
+  "_comment": "业务包配置表。skill 执行时用于：1) 根据包名定位源码/文档根目录；2) 启动本地开发服务供 gant-create-test 进行浏览器验证；3) 云效 MCP 调用所需的组织/项目 ID。",
+  "yunxiao": {
+    "_comment": "云效 MCP 调用配置，调用 mcp__yunxiao_2__* 工具时使用",
+    "organizationId": "61b1f78945bcdc5071135afa",
+    "projects": {
+      "ibom": "583a61f9038c198bea6a85177d",
+      "icost": "",
+      "ilowcode": "",
+      "ip2system": "",
+      "usersystem": ""
+    }
+  },
+  "packages": {
+    "ibom": {
+      "srcRoot": "packages/ibom/src",
+      "docsRoot": "packages/ibom/docs",
+      "startCommand": "pnpm --filter ibom start",
+      "port": 9092,
+      "localUrl": "http://localhost:9092",
+      "description": "智能BOM管理系统"
+    },
+    "icost": {
+      "srcRoot": "packages/icost/src",
+      "docsRoot": "packages/icost/docs",
+      "startCommand": "pnpm --filter icost start",
+      "port": 9093,
+      "localUrl": "http://localhost:9093",
+      "description": "成本管理系统"
+    }
+  }
+}
