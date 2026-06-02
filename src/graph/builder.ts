@@ -124,11 +124,15 @@ function parseSearchArea(files: string[], pagePath: string, pageId: string): Fie
       // Fixture format: flat table where each row is a field
       for (let i = 0; i < table.rows.length; i++) {
         const row = table.rows[i];
+        const fieldLabel = row['字段标签'] || row['列名'] || '';
+        const fieldName = row['参数名'] || row['字段名'] || '';
+        if (!fieldLabel && !fieldName) continue;
+
         fields.push({
           id: `${pageId}/field/${fields.length}`,
           pageId,
-          fieldLabel: row['字段标签'] || row['列名'] || '',
-          fieldName: row['参数名'] || row['字段名'] || '',
+          fieldLabel,
+          fieldName,
           componentType: row['控件类型'] || '',
           required: (row['必填'] || '').trim() === '是',
           defaultValue: row['默认值'],
@@ -177,6 +181,9 @@ function parseGridArea(files: string[], pagePath: string, pageId: string): GridC
     } else {
       for (let i = 0; i < table.rows.length; i++) {
         const row = table.rows[i];
+        const columnTitle = row['列名'] || '';
+        if (!columnTitle) continue;
+
         const widthRaw = row['宽度'];
         const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
         const safeWidth = width && !isNaN(width) ? width : undefined;
@@ -184,9 +191,9 @@ function parseGridArea(files: string[], pagePath: string, pageId: string): GridC
         columns.push({
           id: `${pageId}/column/${columns.length}`,
           pageId,
-          columnTitle: row['列名'] || '',
+          columnTitle,
           fieldName: row['字段名'],
-          displayContent: row['显示内容'] || row['列名'] || '',
+          displayContent: row['显示内容'] || columnTitle,
           editable: (row['可编辑'] || '').trim() === '是',
           width: safeWidth,
           sortable: (row['排序'] || '').trim() === '是',
@@ -232,10 +239,13 @@ function parseButtonArea(files: string[], pagePath: string, pageId: string): But
     } else {
       for (let i = 0; i < table.rows.length; i++) {
         const row = table.rows[i];
+        const buttonName = row['按钮名称'] || '';
+        if (!buttonName) continue;
+
         buttons.push({
           id: `${pageId}/button/${buttons.length}`,
           pageId,
-          buttonName: row['按钮名称'] || '',
+          buttonName,
           scope: row['作用域'] || row['操作类型'] || '',
           position: row['位置'] || '',
           displayCondition: row['显示条件'] || '',
