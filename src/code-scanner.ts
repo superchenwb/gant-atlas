@@ -192,10 +192,11 @@ async function scanSchemaAST(
         if (ts.isIdentifier(decl.name) && decl.name.text === 'searchSchema' && decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
           for (const prop of decl.initializer.properties) {
             if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+              const propName = prop.name;
               const title = extractStringLiteral(ts, prop.initializer);
               if (title !== undefined) {
-                if (!fields.some((f) => f.name === prop.name.text)) {
-                  fields.push({ name: prop.name.text, title });
+                if (!fields.some((f) => f.name === propName.text)) {
+                  fields.push({ name: propName.text, title });
                 }
               }
             }
