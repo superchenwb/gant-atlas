@@ -1,16 +1,26 @@
 import type { Store } from '../../store/sqlite.js';
+import { getStoreDatabase } from '../../store/sqlite.js';
 
-export async function handleCheckConsistency(store: Store, args: unknown) {
-  const { pageId } = args as { pageId?: string };
-  const db = store.db;
-  const issues: Array<{ type: string; description: string; suggestion: string }> = [];
+export interface ConsistencyIssue {
+  type: string;
+  description: string;
+  suggestion: string;
+}
 
-  // Helper to add issue with optional pageId scope
+export interface ConsistencyReport {
+  totalIssues: number;
+  issues: ConsistencyIssue[];
+  summary: string;
+}
+
+export function runConsistencyChecks(store: Store, pageId?: string): ConsistencyReport {
+  const db = getStoreDatabase(store);
+  const issues: ConsistencyIssue[] = [];
+
   const addIssue = (type: string, description: string, suggestion: string) => {
     issues.push({ type, description, suggestion });
   };
 
-  // ─── 1. 页面信息不完整（page_type 或 route 缺失）───
   const incompletePages = db
     .prepare(`SELECT id, page_name, page_title FROM pages WHERE page_type IS NULL OR page_type = '' OR route IS NULL OR route = ''`)
     .all() as Array<{ id: string; page_name: string; page_title: string }>;
@@ -24,7 +34,6 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
     );
   }
 
-  // ─── 2. 空字段列表（page 存在但无 fields）───
   const pagesWithoutFields = db
     .prepare(
       `SELECT p.id, p.page_title FROM pages p
@@ -42,7 +51,6 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
     );
   }
 
-  // ─── 3. 空表格列（page 存在但无 grid_columns）───
   const pagesWithoutColumns = db
     .prepare(
       `SELECT p.id, p.page_title FROM pages p
@@ -60,7 +68,6 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
     );
   }
 
-  // ─── 4. 孤儿 API（无任何 page 或 field 引用）───
   const orphanApis = db
     .prepare(
       `SELECT a.id, a.name FROM apis a
@@ -78,7 +85,6 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
     );
   }
 
-  // ─── 5. 字段名像 API 但未建立 fieldCallsApis 关系 ───
   const apiNames = new Set(
     (db.prepare(`SELECT name FROM apis`).all() as Array<{ name: string }>).map((r) => r.name)
   );
@@ -102,7 +108,6 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
     }
   }
 
-  // ─── 6. 页面引用了 API 但字段未引用（说明 API 只出现在 page 级别）───
   const pagesWithApiButNoFieldLink = db
     .prepare(
       `SELECT DISTINCT p.id, p.page_title FROM pages p
@@ -123,21 +128,24 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
   }
 
   return {
+    totalIssues: issues.length,
+    issues,
+    summary:
+      issues.length === 0
+        ? '所有检查通过，未发现一致性问题'
+        : `发现 ${issues.length} 个一致性问题，请逐一排查`,
+  };
+}
+
+export async function handleCheckConsistency(store: Store, args: unknown) {
+  const { pageId } = args as { pageId?: string };
+  const report = runConsistencyChecks(store, pageId);
+
+  return {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(
-          {
-            totalIssues: issues.length,
-            issues,
-            summary:
-              issues.length === 0
-                ? '所有检查通过，未发现一致性问题'
-                : `发现 ${issues.length} 个一致性问题，请逐一排查`,
-          },
-          null,
-          2
-        ),
+        text: JSON.stringify(report, null, 2),
       },
     ],
   };

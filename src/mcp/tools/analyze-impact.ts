@@ -1,4 +1,5 @@
 import type { Store } from '../../store/sqlite.js';
+import { getStoreDatabase } from '../../store/sqlite.js';
 
 export async function handleAnalyzeImpact(store: Store, args: unknown) {
   const { apiName, fieldName, pageId } = args as {
@@ -7,7 +8,7 @@ export async function handleAnalyzeImpact(store: Store, args: unknown) {
     pageId?: string;
   };
 
-  const db = store.db;
+  const db = getStoreDatabase(store);
 
   // ─── Case 1: 按 API 名称分析影响范围 ───
   if (apiName) {

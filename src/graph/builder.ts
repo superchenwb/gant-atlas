@@ -34,30 +34,50 @@ export function buildGraph(docsPath: string): ParsedFeatureDoc[] {
 }
 
 /**
+ * 轻量级并发限制 — 不需要引入 p-limit 依赖
+ */
+async function withConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let index = 0;
+
+  async function worker(): Promise<void> {
+    while (index < items.length) {
+      const i = index++;
+      results[i] = await fn(items[i]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+const DEFAULT_CONCURRENCY = 50;
+
+/**
  * 异步版本：使用 fs/promises 并发 I/O，千页级场景下显著提速
  */
 export async function buildGraphAsync(docsPath: string): Promise<ParsedFeatureDoc[]> {
   const modules = await listModulesAsync(docsPath);
-  const docs: ParsedFeatureDoc[] = [];
 
-  await Promise.all(
+  const moduleDocsArrays = await Promise.all(
     modules.map(async (module) => {
       const modulePath = join(docsPath, module);
       const pages = await listPagesAsync(modulePath);
 
-      const pageDocs = await Promise.all(
-        pages.map(async (page) => {
-          const pagePath = join(modulePath, page);
-          return buildPageDocAsync(module, page, pagePath);
-        })
-      );
+      const pageDocs = await withConcurrency(pages, DEFAULT_CONCURRENCY, async (page) => {
+        const pagePath = join(modulePath, page);
+        return buildPageDocAsync(module, page, pagePath);
+      });
 
-      for (const doc of pageDocs) {
-        if (doc) docs.push(doc);
-      }
+      return pageDocs.filter((doc): doc is ParsedFeatureDoc => doc !== null);
     })
   );
 
+  const docs = moduleDocsArrays.flat();
   return buildRelations(docs);
 }
 
@@ -187,7 +207,12 @@ function isKeyValueTable(table: { headers: string[]; rows: Record<string, string
   return firstHeader === '属性' || firstHeader === 'key';
 }
 
-interface ParseAreaOptions<T> {
+interface WithId {
+  id: string;
+  pageId: string;
+}
+
+interface ParseAreaOptions<T extends WithId> {
   fileName: string;
   fileKey: 'main' | 'search' | 'grid' | 'button';
   idPrefix: string;
@@ -195,7 +220,7 @@ interface ParseAreaOptions<T> {
   fromRow: (row: Record<string, string>) => T | null;
 }
 
-function parseAreaSync<T>(
+function parseAreaSync<T extends WithId>(
   files: string[],
   pagePath: string,
   pageId: string,
@@ -210,7 +235,7 @@ function parseAreaSync<T>(
   return parseAreaContent(raw, pageId, options);
 }
 
-async function parseAreaAsync<T>(
+async function parseAreaAsync<T extends WithId>(
   files: string[],
   pagePath: string,
   pageId: string,
@@ -225,7 +250,7 @@ async function parseAreaAsync<T>(
   return parseAreaContent(raw, pageId, options);
 }
 
-function parseAreaContent<T>(raw: string, pageId: string, options: ParseAreaOptions<T>): T[] {
+function parseAreaContent<T extends WithId>(raw: string, pageId: string, options: ParseAreaOptions<T>): T[] {
   const parsed = parseMarkdown(raw);
 
   const items: T[] = [];
@@ -238,16 +263,16 @@ function parseAreaContent<T>(raw: string, pageId: string, options: ParseAreaOpti
 
       const item = options.fromKV(kv);
       if (item) {
-        (item as Record<string, unknown>).id = `${pageId}/${options.idPrefix}/${items.length}`;
-        (item as Record<string, unknown>).pageId = pageId;
+        item.id = `${pageId}/${options.idPrefix}/${items.length}`;
+        item.pageId = pageId;
         items.push(item);
       }
     } else {
       for (const row of table.rows) {
         const item = options.fromRow(row);
         if (item) {
-          (item as Record<string, unknown>).id = `${pageId}/${options.idPrefix}/${items.length}`;
-          (item as Record<string, unknown>).pageId = pageId;
+          item.id = `${pageId}/${options.idPrefix}/${items.length}`;
+          item.pageId = pageId;
           items.push(item);
         }
       }
@@ -257,8 +282,8 @@ function parseAreaContent<T>(raw: string, pageId: string, options: ParseAreaOpti
   return items;
 }
 
-function parseSearchAreaSync(files: string[], pagePath: string, pageId: string, custom?: CustomYmlConfig | null): Field[] {
-  return parseAreaSync<Field>(files, pagePath, pageId, {
+function createFieldOptions(): ParseAreaOptions<Field> {
+  return {
     fileName: 'search-area.md',
     fileKey: 'search',
     idPrefix: 'field',
@@ -290,219 +315,119 @@ function parseSearchAreaSync(files: string[], pagePath: string, pageId: string, 
         defaultValue: row['默认值'] || undefined,
       };
     },
-  }, custom);
+  };
+}
+
+function createGridColumnOptions(): ParseAreaOptions<GridColumn> {
+  return {
+    fileName: 'grid-area.md',
+    fileKey: 'grid',
+    idPrefix: 'column',
+    fromKV(kv) {
+      const columnTitle = kv['列标题'] || kv['列名'] || '';
+      if (!columnTitle) return null;
+
+      const widthRaw = kv['宽度'] || kv['列宽'];
+      const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
+      const safeWidth = width && !isNaN(width) ? width : undefined;
+
+      return {
+        id: '',
+        pageId: '',
+        columnTitle,
+        fieldName: kv['字段名'],
+        displayContent: kv['展示内容'] || kv['显示内容'] || columnTitle,
+        editable: (kv['是否可编辑'] || kv['可编辑'] || '').trim() === '是',
+        width: safeWidth,
+        sortable: (kv['排序'] || '').trim() === '是',
+        dataType: kv['数据类型'],
+        align: (kv['对齐'] as 'left' | 'center' | 'right') || undefined,
+      };
+    },
+    fromRow(row) {
+      const columnTitle = row['列名'] || '';
+      if (!columnTitle) return null;
+
+      const widthRaw = row['宽度'];
+      const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
+      const safeWidth = width && !isNaN(width) ? width : undefined;
+
+      return {
+        id: '',
+        pageId: '',
+        columnTitle,
+        fieldName: row['字段名'],
+        displayContent: row['显示内容'] || columnTitle,
+        editable: (row['可编辑'] || '').trim() === '是',
+        width: safeWidth,
+        sortable: (row['排序'] || '').trim() === '是',
+        dataType: row['数据类型'],
+        align: row['对齐'] as 'left' | 'center' | 'right' | undefined,
+      };
+    },
+  };
+}
+
+function createButtonOptions(): ParseAreaOptions<Button> {
+  return {
+    fileName: 'button-area.md',
+    fileKey: 'button',
+    idPrefix: 'button',
+    fromKV(kv) {
+      const buttonName = kv['按钮名称'] || kv['操作名称'] || '';
+      if (!buttonName) return null;
+      return {
+        id: '',
+        pageId: '',
+        buttonName,
+        scope: kv['作用域'] || kv['操作类型'] || '',
+        position: kv['位置'] || '',
+        displayCondition: kv['显示条件'] || '',
+        disabledCondition: kv['禁用条件'] || '',
+        clickResult: kv['点击结果'] || kv['关联操作'] || '',
+        confirmRequired: (kv['确认弹窗'] || '').trim() === '是',
+      };
+    },
+    fromRow(row) {
+      const buttonName = row['按钮名称'] || '';
+      if (!buttonName) return null;
+      return {
+        id: '',
+        pageId: '',
+        buttonName,
+        scope: row['作用域'] || row['操作类型'] || '',
+        position: row['位置'] || '',
+        displayCondition: row['显示条件'] || '',
+        disabledCondition: row['禁用条件'] || '',
+        clickResult: row['点击结果'] || row['关联操作'] || '',
+        confirmRequired: (row['确认弹窗'] || '').trim() === '是',
+      };
+    },
+  };
+}
+
+function parseSearchAreaSync(files: string[], pagePath: string, pageId: string, custom?: CustomYmlConfig | null): Field[] {
+  return parseAreaSync<Field>(files, pagePath, pageId, createFieldOptions(), custom);
 }
 
 async function parseSearchAreaAsync(files: string[], pagePath: string, pageId: string, custom?: CustomYmlConfig | null): Promise<Field[]> {
-  return parseAreaAsync<Field>(files, pagePath, pageId, {
-    fileName: 'search-area.md',
-    fileKey: 'search',
-    idPrefix: 'field',
-    fromKV(kv) {
-      const fieldLabel = kv['字段标签'] || kv['列名'] || '';
-      const fieldName = kv['参数名'] || kv['字段名'] || '';
-      if (!fieldLabel && !fieldName) return null;
-      return {
-        id: '',
-        pageId: '',
-        fieldLabel,
-        fieldName,
-        componentType: kv['控件类型'] || '',
-        required: (kv['必填'] || '').trim() === '是',
-        defaultValue: kv['默认值'] || undefined,
-      };
-    },
-    fromRow(row) {
-      const fieldLabel = row['字段标签'] || row['列名'] || '';
-      const fieldName = row['参数名'] || row['字段名'] || '';
-      if (!fieldLabel && !fieldName) return null;
-      return {
-        id: '',
-        pageId: '',
-        fieldLabel,
-        fieldName,
-        componentType: row['控件类型'] || '',
-        required: (row['必填'] || '').trim() === '是',
-        defaultValue: row['默认值'] || undefined,
-      };
-    },
-  }, custom);
+  return parseAreaAsync<Field>(files, pagePath, pageId, createFieldOptions(), custom);
 }
 
 function parseGridAreaSync(files: string[], pagePath: string, pageId: string, custom?: CustomYmlConfig | null): GridColumn[] {
-  return parseAreaSync<GridColumn>(files, pagePath, pageId, {
-    fileName: 'grid-area.md',
-    fileKey: 'grid',
-    idPrefix: 'column',
-    fromKV(kv) {
-      const columnTitle = kv['列标题'] || kv['列名'] || '';
-      if (!columnTitle) return null;
-
-      const widthRaw = kv['宽度'] || kv['列宽'];
-      const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
-      const safeWidth = width && !isNaN(width) ? width : undefined;
-
-      return {
-        id: '',
-        pageId: '',
-        columnTitle,
-        fieldName: kv['字段名'],
-        displayContent: kv['展示内容'] || kv['显示内容'] || columnTitle,
-        editable: (kv['是否可编辑'] || kv['可编辑'] || '').trim() === '是',
-        width: safeWidth,
-        sortable: (kv['排序'] || '').trim() === '是',
-        dataType: kv['数据类型'],
-        align: (kv['对齐'] as 'left' | 'center' | 'right') || undefined,
-      };
-    },
-    fromRow(row) {
-      const columnTitle = row['列名'] || '';
-      if (!columnTitle) return null;
-
-      const widthRaw = row['宽度'];
-      const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
-      const safeWidth = width && !isNaN(width) ? width : undefined;
-
-      return {
-        id: '',
-        pageId: '',
-        columnTitle,
-        fieldName: row['字段名'],
-        displayContent: row['显示内容'] || columnTitle,
-        editable: (row['可编辑'] || '').trim() === '是',
-        width: safeWidth,
-        sortable: (row['排序'] || '').trim() === '是',
-        dataType: row['数据类型'],
-        align: row['对齐'] as 'left' | 'center' | 'right' | undefined,
-      };
-    },
-  }, custom);
+  return parseAreaSync<GridColumn>(files, pagePath, pageId, createGridColumnOptions(), custom);
 }
 
 async function parseGridAreaAsync(files: string[], pagePath: string, pageId: string, custom?: CustomYmlConfig | null): Promise<GridColumn[]> {
-  return parseAreaAsync<GridColumn>(files, pagePath, pageId, {
-    fileName: 'grid-area.md',
-    fileKey: 'grid',
-    idPrefix: 'column',
-    fromKV(kv) {
-      const columnTitle = kv['列标题'] || kv['列名'] || '';
-      if (!columnTitle) return null;
-
-      const widthRaw = kv['宽度'] || kv['列宽'];
-      const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
-      const safeWidth = width && !isNaN(width) ? width : undefined;
-
-      return {
-        id: '',
-        pageId: '',
-        columnTitle,
-        fieldName: kv['字段名'],
-        displayContent: kv['展示内容'] || kv['显示内容'] || columnTitle,
-        editable: (kv['是否可编辑'] || kv['可编辑'] || '').trim() === '是',
-        width: safeWidth,
-        sortable: (kv['排序'] || '').trim() === '是',
-        dataType: kv['数据类型'],
-        align: (kv['对齐'] as 'left' | 'center' | 'right') || undefined,
-      };
-    },
-    fromRow(row) {
-      const columnTitle = row['列名'] || '';
-      if (!columnTitle) return null;
-
-      const widthRaw = row['宽度'];
-      const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
-      const safeWidth = width && !isNaN(width) ? width : undefined;
-
-      return {
-        id: '',
-        pageId: '',
-        columnTitle,
-        fieldName: row['字段名'],
-        displayContent: row['显示内容'] || columnTitle,
-        editable: (row['可编辑'] || '').trim() === '是',
-        width: safeWidth,
-        sortable: (row['排序'] || '').trim() === '是',
-        dataType: row['数据类型'],
-        align: row['对齐'] as 'left' | 'center' | 'right' | undefined,
-      };
-    },
-  }, custom);
+  return parseAreaAsync<GridColumn>(files, pagePath, pageId, createGridColumnOptions(), custom);
 }
 
 function parseButtonAreaSync(files: string[], pagePath: string, pageId: string, custom?: CustomYmlConfig | null): Button[] {
-  return parseAreaSync<Button>(files, pagePath, pageId, {
-    fileName: 'button-area.md',
-    fileKey: 'button',
-    idPrefix: 'button',
-    fromKV(kv) {
-      const buttonName = kv['按钮名称'] || kv['操作名称'] || '';
-      if (!buttonName) return null;
-      return {
-        id: '',
-        pageId: '',
-        buttonName,
-        scope: kv['作用域'] || kv['操作类型'] || '',
-        position: kv['位置'] || '',
-        displayCondition: kv['显示条件'] || '',
-        disabledCondition: kv['禁用条件'] || '',
-        clickResult: kv['点击结果'] || kv['关联操作'] || '',
-        confirmRequired: (kv['确认弹窗'] || '').trim() === '是',
-      };
-    },
-    fromRow(row) {
-      const buttonName = row['按钮名称'] || '';
-      if (!buttonName) return null;
-      return {
-        id: '',
-        pageId: '',
-        buttonName,
-        scope: row['作用域'] || row['操作类型'] || '',
-        position: row['位置'] || '',
-        displayCondition: row['显示条件'] || '',
-        disabledCondition: row['禁用条件'] || '',
-        clickResult: row['点击结果'] || row['关联操作'] || '',
-        confirmRequired: (row['确认弹窗'] || '').trim() === '是',
-      };
-    },
-  }, custom);
+  return parseAreaSync<Button>(files, pagePath, pageId, createButtonOptions(), custom);
 }
 
 async function parseButtonAreaAsync(files: string[], pagePath: string, pageId: string, custom?: CustomYmlConfig | null): Promise<Button[]> {
-  return parseAreaAsync<Button>(files, pagePath, pageId, {
-    fileName: 'button-area.md',
-    fileKey: 'button',
-    idPrefix: 'button',
-    fromKV(kv) {
-      const buttonName = kv['按钮名称'] || kv['操作名称'] || '';
-      if (!buttonName) return null;
-      return {
-        id: '',
-        pageId: '',
-        buttonName,
-        scope: kv['作用域'] || kv['操作类型'] || '',
-        position: kv['位置'] || '',
-        displayCondition: kv['显示条件'] || '',
-        disabledCondition: kv['禁用条件'] || '',
-        clickResult: kv['点击结果'] || kv['关联操作'] || '',
-        confirmRequired: (kv['确认弹窗'] || '').trim() === '是',
-      };
-    },
-    fromRow(row) {
-      const buttonName = row['按钮名称'] || '';
-      if (!buttonName) return null;
-      return {
-        id: '',
-        pageId: '',
-        buttonName,
-        scope: row['作用域'] || row['操作类型'] || '',
-        position: row['位置'] || '',
-        displayCondition: row['显示条件'] || '',
-        disabledCondition: row['禁用条件'] || '',
-        clickResult: row['点击结果'] || row['关联操作'] || '',
-        confirmRequired: (row['确认弹窗'] || '').trim() === '是',
-      };
-    },
-  }, custom);
+  return parseAreaAsync<Button>(files, pagePath, pageId, createButtonOptions(), custom);
 }
 
 function parseAPIsSync(files: string[], pagePath: string, _pageId: string): API[] {

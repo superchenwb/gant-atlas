@@ -49,26 +49,33 @@ export interface CodeToSpecMapping {
 /**
  * 从路由配置文件提取 route → component 映射
  * 支持 JS/TS 对象字面量格式，如 maps.ts
+ *
+ * 正则作为快速路径；当正则无法匹配时自动回退到 TypeScript AST 解析，
+ * 以容忍代码格式化差异（换行、属性顺序、注释等）。
  */
-export function scanRoutes(routesFile: string): RouteMapping[] {
+export async function scanRoutes(routesFile: string): Promise<RouteMapping[]> {
   const raw = readFileSync(routesFile, 'utf-8');
+  const mappings = scanRoutesRegex(raw);
+
+  // AST fallback when regex yields nothing — handles property reordering,
+  // line breaks between properties, or extra comments.
+  if (mappings.length === 0) {
+    return scanRoutesAST(raw);
+  }
+  return mappings;
+}
+
+function scanRoutesRegex(raw: string): RouteMapping[] {
   const mappings: RouteMapping[] = [];
 
-  // Match entries like:
-  //   path: '/**/dataauthgroup',
-  //   title: '数据权限管理',
-  //   component: '@bombusiness/dataauthgroup',
   const entryRegex = /path:\s*['"]([^'"]+)['"]\s*,\s*(?:title|name):\s*['"]([^'"]*)['"]\s*,\s*component:\s*['"]([^'"]+)['"]/g;
-
   let m: RegExpExecArray | null;
   while ((m = entryRegex.exec(raw)) !== null) {
     mappings.push({ path: m[1], title: m[2], component: m[3] });
   }
 
-  // Also try without title/name (some entries only have name, not title)
   const simpleRegex = /path:\s*['"]([^'"]+)['"]\s*,\s*component:\s*['"]([^'"]+)['"]/g;
   while ((m = simpleRegex.exec(raw)) !== null) {
-    // Avoid duplicates
     if (!mappings.some((r) => r.path === m![1] && r.component === m![2])) {
       mappings.push({ path: m[1], component: m[2] });
     }
@@ -77,13 +84,58 @@ export function scanRoutes(routesFile: string): RouteMapping[] {
   return mappings;
 }
 
+function extractStringLiteral(ts: typeof import('typescript'), node: import('typescript').Node): string | undefined {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  if (ts.isCallExpression(node) && node.arguments.length > 0) {
+    const firstArg = node.arguments[0];
+    if (ts.isStringLiteral(firstArg) || ts.isNoSubstitutionTemplateLiteral(firstArg)) {
+      return firstArg.text;
+    }
+  }
+  return undefined;
+}
+
+async function scanRoutesAST(raw: string): Promise<RouteMapping[]> {
+  const ts = await import('typescript');
+  const sourceFile = ts.createSourceFile('routes.ts', raw, ts.ScriptTarget.Latest, true);
+  const mappings: RouteMapping[] = [];
+
+  function visit(node: import('typescript').Node) {
+    if (ts.isObjectLiteralExpression(node)) {
+      let path: string | undefined;
+      let component: string | undefined;
+      let title: string | undefined;
+
+      for (const prop of node.properties) {
+        if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+          const text = extractStringLiteral(ts, prop.initializer);
+          if (prop.name.text === 'path') path = text;
+          else if (prop.name.text === 'component') component = text;
+          else if (prop.name.text === 'title' || prop.name.text === 'name') title = text;
+        }
+      }
+
+      if (path && component && !mappings.some((r) => r.path === path && r.component === component)) {
+        mappings.push({ path, component, title });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return mappings;
+}
+
 /**
  * 从 schema.ts 提取字段定义
+ * 正则作为快速路径；当正则无法匹配时自动回退到 TypeScript AST 解析
  */
-export function scanSchema(schemaFile: string): {
+export async function scanSchema(schemaFile: string): Promise<{
   fields: Array<{ name: string; title?: string }>;
   columns: Array<{ fieldName: string; title?: string }>;
-} {
+}> {
   const raw = readFileSync(schemaFile, 'utf-8');
 
   const fields: Array<{ name: string; title?: string }> = [];
@@ -111,13 +163,82 @@ export function scanSchema(schemaFile: string): {
     }
   }
 
+  // AST fallback when regex yields nothing for either section
+  if (fields.length === 0 || columns.length === 0) {
+    return scanSchemaAST(raw, fields, columns);
+  }
+
+  return { fields, columns };
+}
+
+async function scanSchemaAST(
+  raw: string,
+  existingFields: Array<{ name: string; title?: string }>,
+  existingColumns: Array<{ fieldName: string; title?: string }>
+): Promise<{
+  fields: Array<{ name: string; title?: string }>;
+  columns: Array<{ fieldName: string; title?: string }>;
+}> {
+  const ts = await import('typescript');
+  const sourceFile = ts.createSourceFile('schema.ts', raw, ts.ScriptTarget.Latest, true);
+
+  const fields = existingFields.length > 0 ? existingFields : [] as Array<{ name: string; title?: string }>;
+  const columns = existingColumns.length > 0 ? existingColumns : [] as Array<{ fieldName: string; title?: string }>;
+
+  function visit(node: import('typescript').Node) {
+    // searchSchema = { ... }
+    if (ts.isVariableStatement(node)) {
+      for (const decl of node.declarationList.declarations) {
+        if (ts.isIdentifier(decl.name) && decl.name.text === 'searchSchema' && decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
+          for (const prop of decl.initializer.properties) {
+            if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+              const title = extractStringLiteral(ts, prop.initializer);
+              if (title !== undefined) {
+                if (!fields.some((f) => f.name === prop.name.text)) {
+                  fields.push({ name: prop.name.text, title });
+                }
+              }
+            }
+          }
+        }
+
+        // gridSchema = [ ... ]
+        if (ts.isIdentifier(decl.name) && decl.name.text === 'gridSchema' && decl.initializer && ts.isArrayLiteralExpression(decl.initializer)) {
+          for (const element of decl.initializer.elements) {
+            if (ts.isObjectLiteralExpression(element)) {
+              let fieldName: string | undefined;
+              let title: string | undefined;
+              for (const prop of element.properties) {
+                if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+                  if (prop.name.text === 'fieldName') {
+                    const val = extractStringLiteral(ts, prop.initializer);
+                    if (val !== undefined) fieldName = val;
+                  } else if (prop.name.text === 'title') {
+                    const val = extractStringLiteral(ts, prop.initializer);
+                    if (val !== undefined) title = val;
+                  }
+                }
+              }
+              if (fieldName && !columns.some((c) => c.fieldName === fieldName)) {
+                columns.push({ fieldName, title });
+              }
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
   return { fields, columns };
 }
 
 /**
  * 从 services.ts 提取 API 函数名
+ * 正则作为快速路径；当正则无法匹配时自动回退到 TypeScript AST 解析
  */
-export function scanServices(servicesFile: string): string[] {
+export async function scanServices(servicesFile: string): Promise<string[]> {
   const raw = readFileSync(servicesFile, 'utf-8');
   const apis: string[] = [];
 
@@ -131,13 +252,49 @@ export function scanServices(servicesFile: string): string[] {
     if (!apis.includes(m[1])) apis.push(m[1]);
   }
 
+  // AST fallback when regex yields nothing
+  if (apis.length === 0) {
+    return scanServicesAST(raw);
+  }
+  return apis;
+}
+
+async function scanServicesAST(raw: string): Promise<string[]> {
+  const ts = await import('typescript');
+  const sourceFile = ts.createSourceFile('services.ts', raw, ts.ScriptTarget.Latest, true);
+  const apis: string[] = [];
+
+  function visit(node: import('typescript').Node) {
+    // export function xxxApi(...)
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      const name = node.name.text;
+      if (name.endsWith('Api') && name[0] >= 'a' && name[0] <= 'z' && !apis.includes(name)) {
+        apis.push(name);
+      }
+    }
+
+    // export const xxxApi = ...
+    if (ts.isVariableStatement(node)) {
+      for (const decl of node.declarationList.declarations) {
+        if (ts.isIdentifier(decl.name)) {
+          const name = decl.name.text;
+          if (name.endsWith('Api') && name[0] >= 'a' && name[0] <= 'z' && !apis.includes(name)) {
+            apis.push(name);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
   return apis;
 }
 
 /**
  * 扫描单个页面代码目录
  */
-export function scanPageDir(pageDir: string, module: string, pageName: string): PageCodeInfo {
+export async function scanPageDir(pageDir: string, module: string, pageName: string): Promise<PageCodeInfo> {
   const info: PageCodeInfo = {
     pageDir,
     module,
@@ -149,7 +306,7 @@ export function scanPageDir(pageDir: string, module: string, pageName: string): 
 
   const schemaFile = join(pageDir, 'schema.ts');
   try {
-    const schema = scanSchema(schemaFile);
+    const schema = await scanSchema(schemaFile);
     info.fields = schema.fields;
     info.columns = schema.columns;
   } catch {
@@ -158,7 +315,7 @@ export function scanPageDir(pageDir: string, module: string, pageName: string): 
 
   const servicesFile = join(pageDir, 'services.ts');
   try {
-    info.apis = scanServices(servicesFile);
+    info.apis = await scanServices(servicesFile);
   } catch {
     // services.ts may not exist
   }
@@ -169,12 +326,12 @@ export function scanPageDir(pageDir: string, module: string, pageName: string): 
 /**
  * 构建代码到功能清单的完整映射
  */
-export function buildMapping(
+export async function buildMapping(
   codeDir: string,
   routesFile: string,
   store: Store
-): CodeToSpecMapping {
-  const routes = scanRoutes(routesFile);
+): Promise<CodeToSpecMapping> {
+  const routes = await scanRoutes(routesFile);
   const result: CodeToSpecMapping = {
     matchedPages: [],
     unmatchedCodePages: [],
@@ -219,7 +376,7 @@ export function buildMapping(
     matchedCodeDirs.add(componentPath);
 
     // Scan code for this page
-    const codeInfo = scanPageDir(componentPath, moduleName, pageName);
+    const codeInfo = await scanPageDir(componentPath, moduleName, pageName);
 
     // Get spec info
     const spec = store.getPageSpec(specPage.id);

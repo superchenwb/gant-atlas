@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createStore, migrate, migrations } from '../../src/store/sqlite.js';
+import { createStore, migrate, migrations, getStoreDatabase } from '../../src/store/sqlite.js';
 import Database from 'better-sqlite3';
 import { join } from 'path';
 import { rmSync } from 'fs';
@@ -13,12 +13,12 @@ describe('SQLite Store', () => {
   });
 
   afterEach(() => {
-    store.db.close();
+    store.close();
     try { rmSync(dbPath); } catch { /* ignore */ }
   });
 
   it('initializes schema', () => {
-    const tables = store.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
+    const tables = getStoreDatabase(store).prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
     const names = tables.map((t) => t.name);
     expect(names).toContain('pages');
     expect(names).toContain('fields');
@@ -60,6 +60,128 @@ describe('SQLite Store', () => {
     const results = store.searchPages('Alpha');
     expect(results.length).toBe(1);
     expect(results[0].pageTitle).toBe('Alpha');
+  });
+
+  it('inserts page with content hash', () => {
+    store.insertPage(
+      { id: 'test/hash', module: 'test', pageName: 'hash', pageTitle: 'Hash' },
+      'abc123'
+    );
+    const hashes = store.getPageHashes();
+    expect(hashes.get('test/hash')).toBe('abc123');
+  });
+
+  it('deletes page and cascades entities', () => {
+    store.insertPage({ id: 'del/page', module: 'del', pageName: 'page', pageTitle: 'Del' });
+    store.insertField({
+      id: 'del/page/f1',
+      pageId: 'del/page',
+      fieldLabel: 'F',
+      fieldName: 'f',
+      componentType: 'Input',
+      required: false,
+    });
+
+    store.deletePage('del/page');
+    const spec = store.getPageSpec('del/page');
+    expect(spec.page).toBeNull();
+    expect(spec.fields).toHaveLength(0);
+  });
+
+  it('clears all project data', () => {
+    store.insertPage({ id: 'clr/a', module: 'clr', pageName: 'a', pageTitle: 'A' });
+    store.insertAPI({ id: 'api/x', name: 'xApi' });
+    store.insertPageAPI('clr/a', 'api/x');
+
+    store.clearProject();
+
+    const pages = getStoreDatabase(store).prepare('SELECT COUNT(*) as c FROM pages').get() as { c: number };
+    expect(pages.c).toBe(0);
+    const apis = getStoreDatabase(store).prepare('SELECT COUNT(*) as c FROM apis').get() as { c: number };
+    expect(apis.c).toBe(0);
+  });
+
+  it('inserts and retrieves grid columns', () => {
+    store.insertPage({ id: 'gc/page', module: 'gc', pageName: 'page', pageTitle: 'GC' });
+    store.insertGridColumn({
+      id: 'gc/page/c1',
+      pageId: 'gc/page',
+      columnTitle: 'Col',
+      fieldName: 'col',
+      displayContent: 'Content',
+      editable: true,
+      width: 120,
+      sortable: true,
+      dataType: 'string',
+      align: 'center',
+    });
+
+    const spec = store.getPageSpec('gc/page');
+    expect(spec.columns).toHaveLength(1);
+    expect(spec.columns[0].columnTitle).toBe('Col');
+    expect(spec.columns[0].editable).toBe(true);
+    expect(spec.columns[0].width).toBe(120);
+    expect(spec.columns[0].sortable).toBe(true);
+    expect(spec.columns[0].align).toBe('center');
+  });
+
+  it('inserts and retrieves buttons', () => {
+    store.insertPage({ id: 'btn/page', module: 'btn', pageName: 'page', pageTitle: 'Btn' });
+    store.insertButton({
+      id: 'btn/page/b1',
+      pageId: 'btn/page',
+      buttonName: 'Save',
+      scope: 'page',
+      position: 'top',
+      displayCondition: '',
+      disabledCondition: '',
+      clickResult: 'save',
+      confirmRequired: true,
+    });
+
+    const spec = store.getPageSpec('btn/page');
+    expect(spec.buttons).toHaveLength(1);
+    expect(spec.buttons[0].buttonName).toBe('Save');
+    expect(spec.buttons[0].confirmRequired).toBe(true);
+  });
+
+  it('inserts APIs and links to pages', () => {
+    store.insertPage({ id: 'api/page', module: 'api', pageName: 'page', pageTitle: 'API' });
+    store.insertAPI({ id: 'api/findApi', name: 'findApi', description: 'Find' });
+    store.insertPageAPI('api/page', 'api/findApi');
+
+    const spec = store.getPageSpec('api/page');
+    expect(spec.apis).toHaveLength(1);
+    expect(spec.apis[0].name).toBe('findApi');
+  });
+
+  it('inserts field calls api relation', () => {
+    store.insertPage({ id: 'fapi/page', module: 'fapi', pageName: 'page', pageTitle: 'FAPI' });
+    store.insertField({
+      id: 'fapi/page/f1',
+      pageId: 'fapi/page',
+      fieldLabel: 'F',
+      fieldName: 'findApi',
+      componentType: 'Input',
+      required: false,
+    });
+    store.insertAPI({ id: 'api/findApi', name: 'findApi' });
+    store.insertFieldCallsAPI('fapi/page/f1', 'api/findApi');
+
+    // Verify relation exists in join table directly
+    const rows = getStoreDatabase(store)
+      .prepare("SELECT * FROM field_calls_apis WHERE field_id = ? AND api_id = ?")
+      .all('fapi/page/f1', 'api/findApi') as Array<Record<string, unknown>>;
+    expect(rows.length).toBe(1);
+  });
+
+  it('returns empty arrays for missing page', () => {
+    const spec = store.getPageSpec('nonexistent/page');
+    expect(spec.page).toBeNull();
+    expect(spec.fields).toEqual([]);
+    expect(spec.columns).toEqual([]);
+    expect(spec.buttons).toEqual([]);
+    expect(spec.apis).toEqual([]);
   });
 });
 

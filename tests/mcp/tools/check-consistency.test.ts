@@ -104,7 +104,7 @@ describe('handleCheckConsistency', () => {
   });
 
   afterEach(() => {
-    store.db.close();
+    store.close();
     try { rmSync(dbPath); } catch { /* ignore */ }
   });
 

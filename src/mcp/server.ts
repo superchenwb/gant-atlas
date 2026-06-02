@@ -4,6 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { createStore } from '../store/sqlite.js';
 import type { Store } from '../store/sqlite.js';
 import { handleGetPageSpec } from './tools/get-page-spec.js';
 import { handleSearchPages } from './tools/search-pages.js';
@@ -11,9 +12,15 @@ import { handleAnalyzeImpact } from './tools/analyze-impact.js';
 import { handleCheckConsistency } from './tools/check-consistency.js';
 import { handleListProjects } from './tools/list-projects.js';
 
+export interface ProjectConfig {
+  id: string;
+  name: string;
+  docsPath: string;
+  dbPath: string;
+}
+
 export interface ServerConfig {
-  store: Store;
-  projects: Array<{ id: string; name: string; docsPath: string }>;
+  projects: ProjectConfig[];
 }
 
 export function createServer(config: ServerConfig): Server {
@@ -28,6 +35,18 @@ export function createServer(config: ServerConfig): Server {
       },
     }
   );
+
+  const projectMap = new Map<string, ProjectConfig>();
+  const storeMap = new Map<string, Store>();
+
+  for (const project of config.projects) {
+    projectMap.set(project.id, project);
+    storeMap.set(project.id, createStore(project.dbPath));
+  }
+
+  function getStore(projectId: string): Store | undefined {
+    return storeMap.get(projectId);
+  }
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
@@ -97,19 +116,38 @@ export function createServer(config: ServerConfig): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    const { projectId } = args as { projectId?: string };
 
     try {
+      if (name === 'list_projects') {
+        return await handleListProjects(config.projects);
+      }
+
+      if (!projectId || !storeMap.has(projectId)) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: projectId
+                ? `Unknown project: ${projectId}`
+                : 'Missing projectId',
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const store = getStore(projectId)!;
+
       switch (name) {
         case 'get_page_spec':
-          return await handleGetPageSpec(config.store, args);
+          return await handleGetPageSpec(store, args);
         case 'search_pages':
-          return await handleSearchPages(config.store, args);
+          return await handleSearchPages(store, args);
         case 'analyze_impact':
-          return await handleAnalyzeImpact(config.store, args);
+          return await handleAnalyzeImpact(store, args);
         case 'check_consistency':
-          return await handleCheckConsistency(config.store, args);
-        case 'list_projects':
-          return await handleListProjects(config.projects);
+          return await handleCheckConsistency(store, args);
         default:
           return {
             content: [

@@ -16,7 +16,6 @@ export interface Migration {
 }
 
 export interface Store {
-  db: Database.Database;
   initSchema(): void;
   insertPage(page: Page, contentHash?: string): void;
   insertField(field: Field): void;
@@ -37,6 +36,22 @@ export interface Store {
   };
   searchPages(keyword: string, module?: string): Page[];
   clearProject(): void;
+  close(): void;
+}
+
+// Internal WeakMap to allow tightly-coupled modules (consistency checks, impact analysis)
+// to access the underlying database without exposing it on the public Store interface.
+const dbMap = new WeakMap<Store, Database.Database>();
+
+/**
+ * Get the underlying better-sqlite3 database instance from a Store.
+ * This is intentionally NOT part of the Store interface — it requires an explicit
+ * import and signals "I know what I'm doing, I need raw SQL access."
+ */
+export function getStoreDatabase(store: Store): Database.Database {
+  const db = dbMap.get(store);
+  if (!db) throw new Error('Store database instance not found');
+  return db;
 }
 
 export const migrations: Migration[] = [
@@ -168,7 +183,6 @@ export function createStore(dbPath: string): Store {
   db.pragma('journal_mode = WAL');
 
   const store: Store = {
-    db,
     initSchema: () => migrate(db),
     insertPage: (page, contentHash) => insertPage(db, page, contentHash),
     insertField: (field) => insertField(db, field),
@@ -183,8 +197,10 @@ export function createStore(dbPath: string): Store {
     getPageSpec: (pageId) => getPageSpec(db, pageId),
     searchPages: (keyword, module) => searchPages(db, keyword, module),
     clearProject: () => clearProject(db),
+    close: () => db.close(),
   };
 
+  dbMap.set(store, db);
   store.initSchema();
   return store;
 }
