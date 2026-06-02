@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { join } from 'path';
 import { serve } from './mcp/server.js';
 import { runIngest, runQueryPage, runMap, runValidate } from './cli/actions.js';
+import { setupCommand } from './cli/setup.js';
 
 const program = new Command();
 
@@ -100,6 +101,13 @@ program
     if (result.hasIssues) {
       process.exit(1);
     }
+  });
+
+program
+  .command('setup')
+  .description('一键配置 MCP（支持 Cursor、Claude Code、OpenCode、Codex）')
+  .action(async () => {
+    await setupCommand();
   });
 
 program.parse();
