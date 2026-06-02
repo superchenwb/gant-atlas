@@ -86,24 +86,58 @@ function parseMain(filePath: string, module: string, pageName: string): Page {
   };
 }
 
+function isKeyValueTable(table: { headers: string[]; rows: Record<string, string>[] }): boolean {
+  const firstHeader = table.headers[0]?.trim().toLowerCase();
+  return firstHeader === '属性' || firstHeader === 'key';
+}
+
 function parseSearchArea(files: string[], pagePath: string, pageId: string): Field[] {
   const file = files.find((f) => f.toLowerCase() === 'search-area.md');
   if (!file) return [];
 
   const raw = readFileSync(join(pagePath, file), 'utf-8');
   const parsed = parseMarkdown(raw);
-  const table = parsed.tables[0];
-  if (!table) return [];
 
-  return table.rows.map((row, idx) => ({
-    id: `${pageId}/field/${idx}`,
-    pageId,
-    fieldLabel: row['字段标签'] || row['列名'] || '',
-    fieldName: row['参数名'] || row['字段名'] || '',
-    componentType: row['控件类型'] || '',
-    required: (row['必填'] || '').trim() === '是',
-    defaultValue: row['默认值'],
-  }));
+  const fields: Field[] = [];
+  for (const table of parsed.tables) {
+    if (table.rows.length === 0) continue;
+
+    if (isKeyValueTable(table)) {
+      // yadea-wiki format: each table is a single field definition
+      const kv = extractKeyValueTable(table);
+      if (Object.keys(kv).length === 0) continue;
+
+      const fieldLabel = kv['字段标签'] || kv['列名'] || '';
+      const fieldName = kv['参数名'] || kv['字段名'] || '';
+      if (!fieldLabel && !fieldName) continue;
+
+      fields.push({
+        id: `${pageId}/field/${fields.length}`,
+        pageId,
+        fieldLabel,
+        fieldName,
+        componentType: kv['控件类型'] || '',
+        required: (kv['必填'] || '').trim() === '是',
+        defaultValue: kv['默认值'],
+      });
+    } else {
+      // Fixture format: flat table where each row is a field
+      for (let i = 0; i < table.rows.length; i++) {
+        const row = table.rows[i];
+        fields.push({
+          id: `${pageId}/field/${fields.length}`,
+          pageId,
+          fieldLabel: row['字段标签'] || row['列名'] || '',
+          fieldName: row['参数名'] || row['字段名'] || '',
+          componentType: row['控件类型'] || '',
+          required: (row['必填'] || '').trim() === '是',
+          defaultValue: row['默认值'],
+        });
+      }
+    }
+  }
+
+  return fields;
 }
 
 function parseGridArea(files: string[], pagePath: string, pageId: string): GridColumn[] {
@@ -112,21 +146,58 @@ function parseGridArea(files: string[], pagePath: string, pageId: string): GridC
 
   const raw = readFileSync(join(pagePath, file), 'utf-8');
   const parsed = parseMarkdown(raw);
-  const table = parsed.tables[0];
-  if (!table) return [];
 
-  return table.rows.map((row, idx) => ({
-    id: `${pageId}/column/${idx}`,
-    pageId,
-    columnTitle: row['列名'] || '',
-    fieldName: row['字段名'],
-    displayContent: row['显示内容'] || row['列名'] || '',
-    editable: (row['可编辑'] || '').trim() === '是',
-    width: row['宽度'] ? parseInt(row['宽度'], 10) : undefined,
-    sortable: (row['排序'] || '').trim() === '是',
-    dataType: row['数据类型'],
-    align: row['对齐'] as 'left' | 'center' | 'right' | undefined,
-  }));
+  const columns: GridColumn[] = [];
+  for (const table of parsed.tables) {
+    if (table.rows.length === 0) continue;
+
+    if (isKeyValueTable(table)) {
+      const kv = extractKeyValueTable(table);
+      if (Object.keys(kv).length === 0) continue;
+
+      const columnTitle = kv['列标题'] || kv['列名'] || '';
+      if (!columnTitle) continue;
+
+      const widthRaw = kv['宽度'] || kv['列宽'];
+      const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
+      const safeWidth = width && !isNaN(width) ? width : undefined;
+
+      columns.push({
+        id: `${pageId}/column/${columns.length}`,
+        pageId,
+        columnTitle,
+        fieldName: kv['字段名'],
+        displayContent: kv['展示内容'] || kv['显示内容'] || columnTitle,
+        editable: (kv['是否可编辑'] || kv['可编辑'] || '').trim() === '是',
+        width: safeWidth,
+        sortable: (kv['排序'] || '').trim() === '是',
+        dataType: kv['数据类型'],
+        align: (kv['对齐'] as 'left' | 'center' | 'right') || undefined,
+      });
+    } else {
+      for (let i = 0; i < table.rows.length; i++) {
+        const row = table.rows[i];
+        const widthRaw = row['宽度'];
+        const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
+        const safeWidth = width && !isNaN(width) ? width : undefined;
+
+        columns.push({
+          id: `${pageId}/column/${columns.length}`,
+          pageId,
+          columnTitle: row['列名'] || '',
+          fieldName: row['字段名'],
+          displayContent: row['显示内容'] || row['列名'] || '',
+          editable: (row['可编辑'] || '').trim() === '是',
+          width: safeWidth,
+          sortable: (row['排序'] || '').trim() === '是',
+          dataType: row['数据类型'],
+          align: row['对齐'] as 'left' | 'center' | 'right' | undefined,
+        });
+      }
+    }
+  }
+
+  return columns;
 }
 
 function parseButtonArea(files: string[], pagePath: string, pageId: string): Button[] {
@@ -135,20 +206,48 @@ function parseButtonArea(files: string[], pagePath: string, pageId: string): But
 
   const raw = readFileSync(join(pagePath, file), 'utf-8');
   const parsed = parseMarkdown(raw);
-  const table = parsed.tables[0];
-  if (!table) return [];
 
-  return table.rows.map((row, idx) => ({
-    id: `${pageId}/button/${idx}`,
-    pageId,
-    buttonName: row['按钮名称'] || '',
-    scope: row['作用域'] || row['操作类型'] || '',
-    position: row['位置'] || '',
-    displayCondition: row['显示条件'] || '',
-    disabledCondition: row['禁用条件'] || '',
-    clickResult: row['点击结果'] || row['关联操作'] || '',
-    confirmRequired: (row['确认弹窗'] || '').trim() === '是',
-  }));
+  const buttons: Button[] = [];
+  for (const table of parsed.tables) {
+    if (table.rows.length === 0) continue;
+
+    if (isKeyValueTable(table)) {
+      const kv = extractKeyValueTable(table);
+      if (Object.keys(kv).length === 0) continue;
+
+      const buttonName = kv['按钮名称'] || kv['操作名称'] || '';
+      if (!buttonName) continue;
+
+      buttons.push({
+        id: `${pageId}/button/${buttons.length}`,
+        pageId,
+        buttonName,
+        scope: kv['作用域'] || kv['操作类型'] || '',
+        position: kv['位置'] || '',
+        displayCondition: kv['显示条件'] || '',
+        disabledCondition: kv['禁用条件'] || '',
+        clickResult: kv['点击结果'] || kv['关联操作'] || '',
+        confirmRequired: (kv['确认弹窗'] || '').trim() === '是',
+      });
+    } else {
+      for (let i = 0; i < table.rows.length; i++) {
+        const row = table.rows[i];
+        buttons.push({
+          id: `${pageId}/button/${buttons.length}`,
+          pageId,
+          buttonName: row['按钮名称'] || '',
+          scope: row['作用域'] || row['操作类型'] || '',
+          position: row['位置'] || '',
+          displayCondition: row['显示条件'] || '',
+          disabledCondition: row['禁用条件'] || '',
+          clickResult: row['点击结果'] || row['关联操作'] || '',
+          confirmRequired: (row['确认弹窗'] || '').trim() === '是',
+        });
+      }
+    }
+  }
+
+  return buttons;
 }
 
 function parseAPIs(_page: Page): API[] {
