@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { createHash } from 'crypto';
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
-import { buildGraph } from './graph/builder.js';
+import { buildGraphAsync } from './graph/builder.js';
 import { createStore } from './store/sqlite.js';
 import { serve } from './mcp/server.js';
 import { buildMapping } from './code-scanner.js';
@@ -21,7 +21,7 @@ program
   .requiredOption('--docsPath <path>', '功能清单根目录路径')
   .requiredOption('--db <path>', 'SQLite 数据库文件路径')
   .option('--force', '强制全量重建（忽略增量检测）')
-  .action((options: { docsPath: string; db: string; force?: boolean }) => {
+  .action(async (options: { docsPath: string; db: string; force?: boolean }) => {
     console.error(`[gant-atlas] 正在导入: ${options.docsPath} -> ${options.db}`);
 
     const store = createStore(options.db);
@@ -31,7 +31,7 @@ program
     }
 
     const existingHashes = store.getPageHashes();
-    const docs = buildGraph(options.docsPath);
+    const docs = await buildGraphAsync(options.docsPath);
 
     // Track which pages from DB are still present in filesystem
     const seenPageIds = new Set<string>();

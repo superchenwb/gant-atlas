@@ -7,7 +7,13 @@ import type {
   API,
 } from '../types/index.js';
 
-const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 2;
+
+export interface Migration {
+  version: number;
+  name: string;
+  up: (db: Database.Database) => void;
+}
 
 export interface Store {
   db: Database.Database;
@@ -33,13 +39,137 @@ export interface Store {
   clearProject(): void;
 }
 
+export const migrations: Migration[] = [
+  {
+    version: 1,
+    name: 'init_tables',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS pages (
+          id TEXT PRIMARY KEY,
+          module TEXT NOT NULL,
+          page_name TEXT NOT NULL,
+          page_title TEXT NOT NULL,
+          page_type TEXT,
+          route TEXT,
+          page_function TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS fields (
+          id TEXT PRIMARY KEY,
+          page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+          field_label TEXT NOT NULL,
+          field_name TEXT NOT NULL,
+          component_type TEXT NOT NULL,
+          required INTEGER NOT NULL DEFAULT 0,
+          default_value TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS grid_columns (
+          id TEXT PRIMARY KEY,
+          page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+          column_title TEXT NOT NULL,
+          field_name TEXT,
+          display_content TEXT NOT NULL,
+          editable INTEGER NOT NULL DEFAULT 0,
+          width INTEGER,
+          sortable INTEGER DEFAULT 0,
+          data_type TEXT,
+          align TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS buttons (
+          id TEXT PRIMARY KEY,
+          page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+          button_name TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          position TEXT NOT NULL,
+          display_condition TEXT,
+          disabled_condition TEXT,
+          click_result TEXT NOT NULL,
+          confirm_required INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS apis (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS field_calls_apis (
+          field_id TEXT NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+          api_id TEXT NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
+          PRIMARY KEY (field_id, api_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS page_calls_apis (
+          page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+          api_id TEXT NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
+          PRIMARY KEY (page_id, api_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pages_module ON pages(module);
+        CREATE INDEX IF NOT EXISTS idx_fields_page_id ON fields(page_id);
+        CREATE INDEX IF NOT EXISTS idx_grid_columns_page_id ON grid_columns(page_id);
+        CREATE INDEX IF NOT EXISTS idx_buttons_page_id ON buttons(page_id);
+        CREATE INDEX IF NOT EXISTS idx_apis_name ON apis(name);
+      `);
+    },
+  },
+  {
+    version: 2,
+    name: 'add_content_hash',
+    up(db) {
+      const hasColumn = db.prepare(
+        "SELECT 1 FROM pragma_table_info('pages') WHERE name = 'content_hash'"
+      ).get() as { '1': number } | undefined;
+      if (!hasColumn) {
+        db.exec(`ALTER TABLE pages ADD COLUMN content_hash TEXT`);
+      }
+    },
+  },
+];
+
+export function migrate(
+  db: Database.Database,
+  targetVersion: number = SCHEMA_VERSION,
+  migrationsToRun: Migration[] = migrations
+): number {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS __version (
+      key TEXT PRIMARY KEY,
+      version INTEGER NOT NULL
+    )
+  `);
+
+  const versionRow = db.prepare("SELECT version FROM __version WHERE key = 'schema'").get() as
+    | { version: number }
+    | undefined;
+  let currentVersion = versionRow?.version ?? 0;
+
+  const pending = migrationsToRun
+    .filter((m) => m.version > currentVersion && m.version <= targetVersion)
+    .sort((a, b) => a.version - b.version);
+
+  for (const m of pending) {
+    m.up(db);
+    currentVersion = m.version;
+  }
+
+  db.prepare("INSERT OR REPLACE INTO __version (key, version) VALUES ('schema', ?)").run(
+    targetVersion
+  );
+
+  return currentVersion;
+}
+
 export function createStore(dbPath: string): Store {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
 
   const store: Store = {
     db,
-    initSchema: () => initSchema(db),
+    initSchema: () => migrate(db),
     insertPage: (page, contentHash) => insertPage(db, page, contentHash),
     insertField: (field) => insertField(db, field),
     insertGridColumn: (column) => insertGridColumn(db, column),
@@ -57,105 +187,6 @@ export function createStore(dbPath: string): Store {
 
   store.initSchema();
   return store;
-}
-
-function initSchema(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS __version (
-      key TEXT PRIMARY KEY,
-      version INTEGER NOT NULL
-    )
-  `);
-
-  const versionRow = db.prepare("SELECT version FROM __version WHERE key = 'schema'").get() as
-    | { version: number }
-    | undefined;
-  const currentVersion = versionRow?.version ?? 0;
-
-  if (currentVersion < 1) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS pages (
-        id TEXT PRIMARY KEY,
-        module TEXT NOT NULL,
-        page_name TEXT NOT NULL,
-        page_title TEXT NOT NULL,
-        page_type TEXT,
-        route TEXT,
-        page_function TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS fields (
-        id TEXT PRIMARY KEY,
-        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-        field_label TEXT NOT NULL,
-        field_name TEXT NOT NULL,
-        component_type TEXT NOT NULL,
-        required INTEGER NOT NULL DEFAULT 0,
-        default_value TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS grid_columns (
-        id TEXT PRIMARY KEY,
-        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-        column_title TEXT NOT NULL,
-        field_name TEXT,
-        display_content TEXT NOT NULL,
-        editable INTEGER NOT NULL DEFAULT 0,
-        width INTEGER,
-        sortable INTEGER DEFAULT 0,
-        data_type TEXT,
-        align TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS buttons (
-        id TEXT PRIMARY KEY,
-        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-        button_name TEXT NOT NULL,
-        scope TEXT NOT NULL,
-        position TEXT NOT NULL,
-        display_condition TEXT,
-        disabled_condition TEXT,
-        click_result TEXT NOT NULL,
-        confirm_required INTEGER NOT NULL DEFAULT 0
-      );
-
-      CREATE TABLE IF NOT EXISTS apis (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE,
-        description TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS field_calls_apis (
-        field_id TEXT NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
-        api_id TEXT NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
-        PRIMARY KEY (field_id, api_id)
-      );
-
-      CREATE TABLE IF NOT EXISTS page_calls_apis (
-        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-        api_id TEXT NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
-        PRIMARY KEY (page_id, api_id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_pages_module ON pages(module);
-      CREATE INDEX IF NOT EXISTS idx_fields_page_id ON fields(page_id);
-      CREATE INDEX IF NOT EXISTS idx_grid_columns_page_id ON grid_columns(page_id);
-      CREATE INDEX IF NOT EXISTS idx_buttons_page_id ON buttons(page_id);
-      CREATE INDEX IF NOT EXISTS idx_apis_name ON apis(name);
-    `);
-  }
-
-  if (currentVersion < 2) {
-    // Migration: add content_hash to pages
-    const hasColumn = db.prepare(
-      "SELECT 1 FROM pragma_table_info('pages') WHERE name = 'content_hash'"
-    ).get() as { '1': number } | undefined;
-    if (!hasColumn) {
-      db.exec(`ALTER TABLE pages ADD COLUMN content_hash TEXT`);
-    }
-  }
-
-  db.prepare("INSERT OR REPLACE INTO __version (key, version) VALUES ('schema', ?)").run(SCHEMA_VERSION);
 }
 
 function insertPage(db: Database.Database, page: Page, contentHash?: string): void {

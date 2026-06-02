@@ -18,10 +18,12 @@
     "@modelcontextprotocol/sdk": "^1.15.0",
     "better-sqlite3": "^12.1.0",
     "commander": "^13.1.0",
+    "js-yaml": "^4.2.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.15.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",

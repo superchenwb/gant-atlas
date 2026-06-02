@@ -1,0 +1,8 @@
+pageTitle: 自定义页面
+pageType: 自定义类型
+route: /custom/route
+pageFunction: 测试 custom.yml 覆盖
+files:
+  main: overview.md
+  search: query.md
+  grid: table.md

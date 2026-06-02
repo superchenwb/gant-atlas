@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildGraph } from '../../src/graph/builder.js';
+import { buildGraph, buildGraphAsync } from '../../src/graph/builder.js';
 import { join } from 'path';
 
 describe('buildGraph', () => {
@@ -7,7 +7,7 @@ describe('buildGraph', () => {
 
   it('builds graph from all fixture docs', () => {
     const result = buildGraph(docsPath);
-    expect(result.length).toBe(2);
+    expect(result.length).toBe(3);
   });
 
   describe('flat format (simple-page)', () => {
@@ -256,5 +256,68 @@ describe('buildGraph', () => {
       // kvName and kvCode do not match any API names
       expect(kvDoc.relations.fieldCallsApis.length).toBe(0);
     });
+  });
+});
+
+describe('buildGraphAsync', () => {
+  const docsPath = join(process.cwd(), 'tests', 'fixtures');
+
+  it('produces identical output to buildGraph', async () => {
+    const syncResult = buildGraph(docsPath);
+    const asyncResult = await buildGraphAsync(docsPath);
+
+    expect(asyncResult.length).toBe(syncResult.length);
+
+    for (const syncDoc of syncResult) {
+      const asyncDoc = asyncResult.find((d) => d.page.id === syncDoc.page.id);
+      expect(asyncDoc).toBeDefined();
+      expect(asyncDoc!.page).toEqual(syncDoc.page);
+      expect(asyncDoc!.fields).toEqual(syncDoc.fields);
+      expect(asyncDoc!.columns).toEqual(syncDoc.columns);
+      expect(asyncDoc!.buttons).toEqual(syncDoc.buttons);
+      expect(asyncDoc!.apis).toEqual(syncDoc.apis);
+      expect(asyncDoc!.relations).toEqual(syncDoc.relations);
+    }
+  });
+
+  it('parses all fixture pages concurrently', async () => {
+    const result = await buildGraphAsync(docsPath);
+    const ids = result.map((d) => d.page.id).sort();
+    expect(ids).toEqual(['test-module/custom-page', 'test-module/kv-page', 'test-module/simple-page']);
+  });
+});
+
+describe('custom.yml plugin', () => {
+  const docsPath = join(process.cwd(), 'tests', 'fixtures');
+
+  it('overrides page metadata from custom.yml', () => {
+    const result = buildGraph(docsPath);
+    const doc = result.find((d) => d.page.id === 'test-module/custom-page')!;
+
+    expect(doc.page.pageTitle).toBe('自定义页面');
+    expect(doc.page.pageType).toBe('自定义类型');
+    expect(doc.page.route).toBe('/custom/route');
+    expect(doc.page.pageFunction).toBe('测试 custom.yml 覆盖');
+  });
+
+  it('uses custom file names defined in custom.yml', () => {
+    const result = buildGraph(docsPath);
+    const doc = result.find((d) => d.page.id === 'test-module/custom-page')!;
+
+    // overview.md parsed as main, query.md parsed as search, table.md parsed as grid
+    expect(doc.fields.length).toBe(1);
+    expect(doc.fields[0].fieldName).toBe('queryField');
+
+    expect(doc.columns.length).toBe(1);
+    expect(doc.columns[0].fieldName).toBe('tableCol');
+  });
+
+  it('works with async builder too', async () => {
+    const result = await buildGraphAsync(docsPath);
+    const doc = result.find((d) => d.page.id === 'test-module/custom-page')!;
+
+    expect(doc.page.pageTitle).toBe('自定义页面');
+    expect(doc.fields.length).toBe(1);
+    expect(doc.columns.length).toBe(1);
   });
 });
