@@ -8,6 +8,7 @@ import type { Store } from '../store/sqlite.js';
 import { handleGetPageSpec } from './tools/get-page-spec.js';
 import { handleSearchPages } from './tools/search-pages.js';
 import { handleAnalyzeImpact } from './tools/analyze-impact.js';
+import { handleCheckConsistency } from './tools/check-consistency.js';
 import { handleListProjects } from './tools/list-projects.js';
 
 export interface ServerConfig {
@@ -71,6 +72,18 @@ export function createServer(config: ServerConfig): Server {
           },
         },
         {
+          name: 'check_consistency',
+          description: '检查数据一致性问题（空字段、孤儿 API、字段/API 不匹配等）',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectId: { type: 'string', description: '项目 ID' },
+              pageId: { type: 'string', description: '页面 ID（可选，指定则只检查该页面）' },
+            },
+            required: ['projectId'],
+          },
+        },
+        {
           name: 'list_projects',
           description: '列出所有已配置的项目',
           inputSchema: {
@@ -93,6 +106,8 @@ export function createServer(config: ServerConfig): Server {
           return await handleSearchPages(config.store, args);
         case 'analyze_impact':
           return await handleAnalyzeImpact(config.store, args);
+        case 'check_consistency':
+          return await handleCheckConsistency(config.store, args);
         case 'list_projects':
           return await handleListProjects(config.projects);
         default:
