@@ -6,6 +6,7 @@ import { join } from 'path';
 import { buildGraph } from './graph/builder.js';
 import { createStore } from './store/sqlite.js';
 import { serve } from './mcp/server.js';
+import { buildMapping } from './code-scanner.js';
 
 const program = new Command();
 
@@ -121,6 +122,19 @@ program
         store.db.close();
       })
   );
+
+program
+  .command('map')
+  .description('扫描代码目录，建立代码与功能清单的映射关系（Semantic Mapper）')
+  .requiredOption('--codeDir <path>', '代码根目录路径（如 packages/ibom/src）')
+  .requiredOption('--routesFile <path>', '路由配置文件路径（如 maps.ts）')
+  .requiredOption('--db <path>', 'SQLite 数据库文件路径')
+  .action((options: { codeDir: string; routesFile: string; db: string }) => {
+    const store = createStore(options.db);
+    const mapping = buildMapping(options.codeDir, options.routesFile, store);
+    console.log(JSON.stringify(mapping, null, 2));
+    store.db.close();
+  });
 
 program.parse();
 
