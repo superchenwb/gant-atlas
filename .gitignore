@@ -21,3 +21,8 @@ lerna-debug.log*
 
 **/node_modules/
 **/dist/
+
+# Test artifacts
+coverage/
+*.db-shm
+*.db-wal
