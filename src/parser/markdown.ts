@@ -208,6 +208,20 @@ export function extractKeyValuesByTitle(
 }
 
 /**
+ * 从 Markdown 文本中提取 API 名称引用
+ * 匹配模式: 驼峰命名 + Api 后缀，如 dataAuthGroupFindListApi
+ */
+export function extractAPIReferences(rawContent: string): string[] {
+  const apiRegex = /\b([a-z][a-zA-Z0-9]*Api)\b/g;
+  const matches = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = apiRegex.exec(rawContent)) !== null) {
+    matches.add(m[1]);
+  }
+  return Array.from(matches);
+}
+
+/**
  * 从文件名推断文档类型
  */
 export function inferDocType(fileName: string): 'main' | 'search-area' | 'grid-area' | 'button-area' | 'tab-area' | 'header-area' | 'other' {

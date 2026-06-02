@@ -83,6 +83,11 @@ export interface FieldCallsAPI {
   apiId: string;
 }
 
+export interface PageHasAPI {
+  pageId: string;
+  apiId: string;
+}
+
 export interface ButtonTriggersModal {
   buttonId: string;
   modalName: string;
@@ -102,6 +107,7 @@ export interface ParsedFeatureDoc {
     pageHasFields: PageHasField[];
     pageHasColumns: PageHasColumn[];
     pageHasButtons: PageHasButton[];
+    pageHasApis: PageHasAPI[];
     fieldCallsApis: FieldCallsAPI[];
     buttonTriggersModals: ButtonTriggersModal[];
   };

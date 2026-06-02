@@ -17,6 +17,7 @@ export interface Store {
   insertGridColumn(column: GridColumn): void;
   insertButton(button: Button): void;
   insertAPI(api: API): void;
+  insertPageAPI(pageId: string, apiId: string): void;
   getPageSpec(pageId: string): {
     page: Page | null;
     fields: Field[];
@@ -40,6 +41,7 @@ export function createStore(dbPath: string): Store {
     insertGridColumn: (column) => insertGridColumn(db, column),
     insertButton: (button) => insertButton(db, button),
     insertAPI: (api) => insertAPI(db, api),
+    insertPageAPI: (pageId, apiId) => insertPageAPI(db, pageId, apiId),
     getPageSpec: (pageId) => getPageSpec(db, pageId),
     searchPages: (keyword, module) => searchPages(db, keyword, module),
     clearProject: () => clearProject(db),
@@ -120,6 +122,12 @@ function initSchema(db: Database.Database): void {
         field_id TEXT NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
         api_id TEXT NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
         PRIMARY KEY (field_id, api_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS page_calls_apis (
+        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+        api_id TEXT NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
+        PRIMARY KEY (page_id, api_id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_pages_module ON pages(module);
@@ -241,6 +249,14 @@ function insertAPI(db: Database.Database, api: API): void {
   ).run(api.id, api.name, api.description ?? null);
 }
 
+function insertPageAPI(db: Database.Database, pageId: string, apiId: string): void {
+  db.prepare(
+    `INSERT INTO page_calls_apis (page_id, api_id)
+     VALUES (?, ?)
+     ON CONFLICT(page_id, api_id) DO NOTHING`
+  ).run(pageId, apiId);
+}
+
 function getPageSpec(
   db: Database.Database,
   pageId: string
@@ -258,9 +274,8 @@ function getPageSpec(
   const apis = db
     .prepare(
       `SELECT a.* FROM apis a
-       JOIN field_calls_apis fca ON a.id = fca.api_id
-       JOIN fields f ON fca.field_id = f.id
-       WHERE f.page_id = ?`
+       JOIN page_calls_apis pca ON a.id = pca.api_id
+       WHERE pca.page_id = ?`
     )
     .all(pageId) as APIRow[];
 
@@ -288,6 +303,7 @@ function searchPages(db: Database.Database, keyword: string, module?: string): P
 }
 
 function clearProject(db: Database.Database): void {
+  db.exec('DELETE FROM page_calls_apis');
   db.exec('DELETE FROM field_calls_apis');
   db.exec('DELETE FROM fields');
   db.exec('DELETE FROM grid_columns');

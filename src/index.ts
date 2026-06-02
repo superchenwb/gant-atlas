@@ -30,6 +30,16 @@ program
       for (const col of doc.columns) store.insertGridColumn(col);
       for (const btn of doc.buttons) store.insertButton(btn);
       for (const api of doc.apis) store.insertAPI(api);
+      for (const rel of doc.relations.pageHasApis) {
+        store.insertPageAPI(rel.pageId, rel.apiId);
+      }
+      for (const rel of doc.relations.fieldCallsApis) {
+        store.db
+          .prepare(
+            `INSERT INTO field_calls_apis (field_id, api_id) VALUES (?, ?) ON CONFLICT(field_id, api_id) DO NOTHING`
+          )
+          .run(rel.fieldId, rel.apiId);
+      }
     }
 
     console.error(`[gant-atlas] 导入完成: ${docs.length} 个页面`);

@@ -1,4 +1,4 @@
-import { parseMarkdown, extractKeyValueTable, findTablesByTitle } from '../parser/markdown.js';
+import { parseMarkdown, extractKeyValueTable, findTablesByTitle, extractAPIReferences } from '../parser/markdown.js';
 import type {
   Page,
   Field,
@@ -50,7 +50,7 @@ function buildPageDoc(module: string, pageName: string, pagePath: string): Parse
   const fields = parseSearchArea(files, pagePath, page.id);
   const columns = parseGridArea(files, pagePath, page.id);
   const buttons = parseButtonArea(files, pagePath, page.id);
-  const apis = parseAPIs(page);
+  const apis = parseAPIs(files, pagePath, page.id);
 
   return {
     page,
@@ -62,6 +62,7 @@ function buildPageDoc(module: string, pageName: string, pagePath: string): Parse
       pageHasFields: [],
       pageHasColumns: [],
       pageHasButtons: [],
+      pageHasApis: [],
       fieldCallsApis: [],
       buttonTriggersModals: [],
     },
@@ -260,10 +261,22 @@ function parseButtonArea(files: string[], pagePath: string, pageId: string): But
   return buttons;
 }
 
-function parseAPIs(_page: Page): API[] {
-  // APIs are extracted from main.md association table in a real implementation
-  // For now, return empty — they will be populated from main.md parsing if present
-  return [];
+function parseAPIs(files: string[], pagePath: string, _pageId: string): API[] {
+  const apiNames = new Set<string>();
+
+  for (const file of files) {
+    if (!file.toLowerCase().endsWith('.md')) continue;
+    const raw = readFileSync(join(pagePath, file), 'utf-8');
+    for (const name of extractAPIReferences(raw)) {
+      apiNames.add(name);
+    }
+  }
+
+  return Array.from(apiNames).map((name) => ({
+    id: `api/${name}`,
+    name,
+    description: undefined,
+  }));
 }
 
 /**
@@ -283,6 +296,14 @@ function buildRelations(docs: ParsedFeatureDoc[]): ParsedFeatureDoc[] {
     doc.relations.pageHasFields = fields.map((f) => ({ pageId: page.id, fieldId: f.id }));
     doc.relations.pageHasColumns = columns.map((c) => ({ pageId: page.id, columnId: c.id }));
     doc.relations.pageHasButtons = buttons.map((b) => ({ pageId: page.id, buttonId: b.id }));
+
+    // Map page -> API if API is mentioned in the page
+    for (const api of doc.apis) {
+      const resolvedApi = apiMap.get(api.name);
+      if (resolvedApi) {
+        doc.relations.pageHasApis.push({ pageId: page.id, apiId: resolvedApi.id });
+      }
+    }
 
     // Map field -> API if fieldName matches an API name
     for (const field of fields) {
