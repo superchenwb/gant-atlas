@@ -7,17 +7,21 @@ import type {
   API,
 } from '../types/index.js';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export interface Store {
   db: Database.Database;
   initSchema(): void;
-  insertPage(page: Page): void;
+  insertPage(page: Page, contentHash?: string): void;
   insertField(field: Field): void;
   insertGridColumn(column: GridColumn): void;
   insertButton(button: Button): void;
   insertAPI(api: API): void;
   insertPageAPI(pageId: string, apiId: string): void;
+  insertFieldCallsAPI(fieldId: string, apiId: string): void;
+  deletePageEntities(pageId: string): void;
+  deletePage(pageId: string): void;
+  getPageHashes(): Map<string, string>;
   getPageSpec(pageId: string): {
     page: Page | null;
     fields: Field[];
@@ -36,12 +40,16 @@ export function createStore(dbPath: string): Store {
   const store: Store = {
     db,
     initSchema: () => initSchema(db),
-    insertPage: (page) => insertPage(db, page),
+    insertPage: (page, contentHash) => insertPage(db, page, contentHash),
     insertField: (field) => insertField(db, field),
     insertGridColumn: (column) => insertGridColumn(db, column),
     insertButton: (button) => insertButton(db, button),
     insertAPI: (api) => insertAPI(db, api),
     insertPageAPI: (pageId, apiId) => insertPageAPI(db, pageId, apiId),
+    insertFieldCallsAPI: (fieldId, apiId) => insertFieldCallsAPI(db, fieldId, apiId),
+    deletePageEntities: (pageId) => deletePageEntities(db, pageId),
+    deletePage: (pageId) => deletePage(db, pageId),
+    getPageHashes: () => getPageHashes(db),
     getPageSpec: (pageId) => getPageSpec(db, pageId),
     searchPages: (keyword, module) => searchPages(db, keyword, module),
     clearProject: () => clearProject(db),
@@ -52,7 +60,6 @@ export function createStore(dbPath: string): Store {
 }
 
 function initSchema(db: Database.Database): void {
-  // Schema version tracking
   db.exec(`
     CREATE TABLE IF NOT EXISTS __version (
       key TEXT PRIMARY KEY,
@@ -136,22 +143,33 @@ function initSchema(db: Database.Database): void {
       CREATE INDEX IF NOT EXISTS idx_buttons_page_id ON buttons(page_id);
       CREATE INDEX IF NOT EXISTS idx_apis_name ON apis(name);
     `);
-
-    db.prepare("INSERT OR REPLACE INTO __version (key, version) VALUES ('schema', ?)").run(SCHEMA_VERSION);
   }
+
+  if (currentVersion < 2) {
+    // Migration: add content_hash to pages
+    const hasColumn = db.prepare(
+      "SELECT 1 FROM pragma_table_info('pages') WHERE name = 'content_hash'"
+    ).get() as { '1': number } | undefined;
+    if (!hasColumn) {
+      db.exec(`ALTER TABLE pages ADD COLUMN content_hash TEXT`);
+    }
+  }
+
+  db.prepare("INSERT OR REPLACE INTO __version (key, version) VALUES ('schema', ?)").run(SCHEMA_VERSION);
 }
 
-function insertPage(db: Database.Database, page: Page): void {
+function insertPage(db: Database.Database, page: Page, contentHash?: string): void {
   db.prepare(
-    `INSERT INTO pages (id, module, page_name, page_title, page_type, route, page_function)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO pages (id, module, page_name, page_title, page_type, route, page_function, content_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        module = excluded.module,
        page_name = excluded.page_name,
        page_title = excluded.page_title,
        page_type = excluded.page_type,
        route = excluded.route,
-       page_function = excluded.page_function`
+       page_function = excluded.page_function,
+       content_hash = excluded.content_hash`
   ).run(
     page.id,
     page.module,
@@ -159,7 +177,8 @@ function insertPage(db: Database.Database, page: Page): void {
     page.pageTitle,
     page.pageType ?? null,
     page.route ?? null,
-    page.pageFunction ?? null
+    page.pageFunction ?? null,
+    contentHash ?? null
   );
 }
 
@@ -257,6 +276,36 @@ function insertPageAPI(db: Database.Database, pageId: string, apiId: string): vo
   ).run(pageId, apiId);
 }
 
+function insertFieldCallsAPI(db: Database.Database, fieldId: string, apiId: string): void {
+  db.prepare(
+    `INSERT INTO field_calls_apis (field_id, api_id)
+     VALUES (?, ?)
+     ON CONFLICT(field_id, api_id) DO NOTHING`
+  ).run(fieldId, apiId);
+}
+
+function deletePageEntities(db: Database.Database, pageId: string): void {
+  db.prepare('DELETE FROM field_calls_apis WHERE field_id IN (SELECT id FROM fields WHERE page_id = ?)').run(pageId);
+  db.prepare('DELETE FROM page_calls_apis WHERE page_id = ?').run(pageId);
+  db.prepare('DELETE FROM fields WHERE page_id = ?').run(pageId);
+  db.prepare('DELETE FROM grid_columns WHERE page_id = ?').run(pageId);
+  db.prepare('DELETE FROM buttons WHERE page_id = ?').run(pageId);
+}
+
+function deletePage(db: Database.Database, pageId: string): void {
+  deletePageEntities(db, pageId);
+  db.prepare('DELETE FROM pages WHERE id = ?').run(pageId);
+}
+
+function getPageHashes(db: Database.Database): Map<string, string> {
+  const rows = db.prepare('SELECT id, content_hash FROM pages').all() as Array<{ id: string; content_hash: string | null }>;
+  const map = new Map<string, string>();
+  for (const r of rows) {
+    if (r.content_hash) map.set(r.id, r.content_hash);
+  }
+  return map;
+}
+
 function getPageSpec(
   db: Database.Database,
   pageId: string
@@ -322,6 +371,7 @@ interface PageRow {
   page_type: string | null;
   route: string | null;
   page_function: string | null;
+  content_hash: string | null;
 }
 
 interface FieldRow {

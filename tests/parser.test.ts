@@ -3,6 +3,7 @@ import {
   parseMarkdown,
   splitCells,
   extractKeyValueTable,
+  extractAPIReferences,
   inferDocType,
 } from '../src/parser/markdown.js';
 
@@ -76,6 +77,52 @@ describe('extractKeyValueTable', () => {
       rows: [{ Key: 'name', Value: 'test' }],
     };
     expect(extractKeyValueTable(table)).toEqual({ name: 'test' });
+  });
+});
+
+describe('extractAPIReferences', () => {
+  it('extracts API names with Api suffix', () => {
+    const raw = '调用 dataAuthGroupFindListApi 查询列表，然后使用 dataAuthGroupSaveApi 保存。';
+    const result = extractAPIReferences(raw);
+    expect(result).toContain('dataAuthGroupFindListApi');
+    expect(result).toContain('dataAuthGroupSaveApi');
+    expect(result.length).toBe(2);
+  });
+
+  it('returns unique API names without duplicates', () => {
+    const raw = 'dataAuthGroupFindListApi 被调用多次，dataAuthGroupFindListApi 再次调用。';
+    const result = extractAPIReferences(raw);
+    expect(result).toEqual(['dataAuthGroupFindListApi']);
+  });
+
+  it('ignores words without Api suffix', () => {
+    const raw = '这是一个普通文本，没有 API 引用，只有一些普通单词 like hello world。';
+    const result = extractAPIReferences(raw);
+    expect(result.length).toBe(0);
+  });
+
+  it('ignores Api prefix words (must be camelCase starting with lowercase)', () => {
+    const raw = 'ApiGateway 不是有效的，DataAuthGroupFindListApi 以大写开头也不匹配。';
+    const result = extractAPIReferences(raw);
+    expect(result).not.toContain('ApiGateway');
+    expect(result).not.toContain('DataAuthGroupFindListApi');
+    expect(result.length).toBe(0);
+  });
+
+  it('handles empty or whitespace-only input', () => {
+    expect(extractAPIReferences('')).toEqual([]);
+    expect(extractAPIReferences('   ')).toEqual([]);
+  });
+
+  it('extracts from markdown table content', () => {
+    const raw = `| 场景 | 说明 |
+|------|------|
+| 查询 | 使用 userFindListApi 查询 |
+| 保存 | 使用 userSaveApi 保存 |`;
+    const result = extractAPIReferences(raw);
+    expect(result).toContain('userFindListApi');
+    expect(result).toContain('userSaveApi');
+    expect(result.length).toBe(2);
   });
 });
 

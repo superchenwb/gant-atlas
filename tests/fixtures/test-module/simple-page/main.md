@@ -7,3 +7,10 @@
 | 页面类型 | 数据管理页   |
 | 路径     | /test/page   |
 | 页面功能 | 测试功能清单解析 |
+
+## 接口链路
+
+| 场景 | 说明 |
+|------|------|
+| 查询 | 使用 simplePageFindListApi 查询数据 |
+| 保存 | 使用 simplePageSaveApi 保存数据 |

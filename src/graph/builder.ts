@@ -92,84 +92,99 @@ function isKeyValueTable(table: { headers: string[]; rows: Record<string, string
   return firstHeader === '属性' || firstHeader === 'key';
 }
 
-function parseSearchArea(files: string[], pagePath: string, pageId: string): Field[] {
-  const file = files.find((f) => f.toLowerCase() === 'search-area.md');
+interface ParseAreaOptions<T> {
+  fileName: string;
+  idPrefix: string;
+  fromKV: (kv: Record<string, string>) => T | null;
+  fromRow: (row: Record<string, string>) => T | null;
+}
+
+function parseArea<T>(files: string[], pagePath: string, pageId: string, options: ParseAreaOptions<T>): T[] {
+  const file = files.find((f) => f.toLowerCase() === options.fileName);
   if (!file) return [];
 
   const raw = readFileSync(join(pagePath, file), 'utf-8');
   const parsed = parseMarkdown(raw);
 
-  const fields: Field[] = [];
+  const items: T[] = [];
   for (const table of parsed.tables) {
     if (table.rows.length === 0) continue;
 
     if (isKeyValueTable(table)) {
-      // yadea-wiki format: each table is a single field definition
       const kv = extractKeyValueTable(table);
       if (Object.keys(kv).length === 0) continue;
 
-      const fieldLabel = kv['字段标签'] || kv['列名'] || '';
-      const fieldName = kv['参数名'] || kv['字段名'] || '';
-      if (!fieldLabel && !fieldName) continue;
-
-      fields.push({
-        id: `${pageId}/field/${fields.length}`,
-        pageId,
-        fieldLabel,
-        fieldName,
-        componentType: kv['控件类型'] || '',
-        required: (kv['必填'] || '').trim() === '是',
-        defaultValue: kv['默认值'],
-      });
+      const item = options.fromKV(kv);
+      if (item) {
+        (item as Record<string, unknown>).id = `${pageId}/${options.idPrefix}/${items.length}`;
+        (item as Record<string, unknown>).pageId = pageId;
+        items.push(item);
+      }
     } else {
-      // Fixture format: flat table where each row is a field
-      for (let i = 0; i < table.rows.length; i++) {
-        const row = table.rows[i];
-        const fieldLabel = row['字段标签'] || row['列名'] || '';
-        const fieldName = row['参数名'] || row['字段名'] || '';
-        if (!fieldLabel && !fieldName) continue;
-
-        fields.push({
-          id: `${pageId}/field/${fields.length}`,
-          pageId,
-          fieldLabel,
-          fieldName,
-          componentType: row['控件类型'] || '',
-          required: (row['必填'] || '').trim() === '是',
-          defaultValue: row['默认值'],
-        });
+      for (const row of table.rows) {
+        const item = options.fromRow(row);
+        if (item) {
+          (item as Record<string, unknown>).id = `${pageId}/${options.idPrefix}/${items.length}`;
+          (item as Record<string, unknown>).pageId = pageId;
+          items.push(item);
+        }
       }
     }
   }
 
-  return fields;
+  return items;
+}
+
+function parseSearchArea(files: string[], pagePath: string, pageId: string): Field[] {
+  return parseArea<Field>(files, pagePath, pageId, {
+    fileName: 'search-area.md',
+    idPrefix: 'field',
+    fromKV(kv) {
+      const fieldLabel = kv['字段标签'] || kv['列名'] || '';
+      const fieldName = kv['参数名'] || kv['字段名'] || '';
+      if (!fieldLabel && !fieldName) return null;
+      return {
+        id: '',
+        pageId: '',
+        fieldLabel,
+        fieldName,
+        componentType: kv['控件类型'] || '',
+        required: (kv['必填'] || '').trim() === '是',
+        defaultValue: kv['默认值'] || undefined,
+      };
+    },
+    fromRow(row) {
+      const fieldLabel = row['字段标签'] || row['列名'] || '';
+      const fieldName = row['参数名'] || row['字段名'] || '';
+      if (!fieldLabel && !fieldName) return null;
+      return {
+        id: '',
+        pageId: '',
+        fieldLabel,
+        fieldName,
+        componentType: row['控件类型'] || '',
+        required: (row['必填'] || '').trim() === '是',
+        defaultValue: row['默认值'] || undefined,
+      };
+    },
+  });
 }
 
 function parseGridArea(files: string[], pagePath: string, pageId: string): GridColumn[] {
-  const file = files.find((f) => f.toLowerCase() === 'grid-area.md');
-  if (!file) return [];
-
-  const raw = readFileSync(join(pagePath, file), 'utf-8');
-  const parsed = parseMarkdown(raw);
-
-  const columns: GridColumn[] = [];
-  for (const table of parsed.tables) {
-    if (table.rows.length === 0) continue;
-
-    if (isKeyValueTable(table)) {
-      const kv = extractKeyValueTable(table);
-      if (Object.keys(kv).length === 0) continue;
-
+  return parseArea<GridColumn>(files, pagePath, pageId, {
+    fileName: 'grid-area.md',
+    idPrefix: 'column',
+    fromKV(kv) {
       const columnTitle = kv['列标题'] || kv['列名'] || '';
-      if (!columnTitle) continue;
+      if (!columnTitle) return null;
 
       const widthRaw = kv['宽度'] || kv['列宽'];
       const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
       const safeWidth = width && !isNaN(width) ? width : undefined;
 
-      columns.push({
-        id: `${pageId}/column/${columns.length}`,
-        pageId,
+      return {
+        id: '',
+        pageId: '',
         columnTitle,
         fieldName: kv['字段名'],
         displayContent: kv['展示内容'] || kv['显示内容'] || columnTitle,
@@ -178,57 +193,42 @@ function parseGridArea(files: string[], pagePath: string, pageId: string): GridC
         sortable: (kv['排序'] || '').trim() === '是',
         dataType: kv['数据类型'],
         align: (kv['对齐'] as 'left' | 'center' | 'right') || undefined,
-      });
-    } else {
-      for (let i = 0; i < table.rows.length; i++) {
-        const row = table.rows[i];
-        const columnTitle = row['列名'] || '';
-        if (!columnTitle) continue;
+      };
+    },
+    fromRow(row) {
+      const columnTitle = row['列名'] || '';
+      if (!columnTitle) return null;
 
-        const widthRaw = row['宽度'];
-        const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
-        const safeWidth = width && !isNaN(width) ? width : undefined;
+      const widthRaw = row['宽度'];
+      const width = widthRaw ? parseInt(widthRaw, 10) : undefined;
+      const safeWidth = width && !isNaN(width) ? width : undefined;
 
-        columns.push({
-          id: `${pageId}/column/${columns.length}`,
-          pageId,
-          columnTitle,
-          fieldName: row['字段名'],
-          displayContent: row['显示内容'] || columnTitle,
-          editable: (row['可编辑'] || '').trim() === '是',
-          width: safeWidth,
-          sortable: (row['排序'] || '').trim() === '是',
-          dataType: row['数据类型'],
-          align: row['对齐'] as 'left' | 'center' | 'right' | undefined,
-        });
-      }
-    }
-  }
-
-  return columns;
+      return {
+        id: '',
+        pageId: '',
+        columnTitle,
+        fieldName: row['字段名'],
+        displayContent: row['显示内容'] || columnTitle,
+        editable: (row['可编辑'] || '').trim() === '是',
+        width: safeWidth,
+        sortable: (row['排序'] || '').trim() === '是',
+        dataType: row['数据类型'],
+        align: row['对齐'] as 'left' | 'center' | 'right' | undefined,
+      };
+    },
+  });
 }
 
 function parseButtonArea(files: string[], pagePath: string, pageId: string): Button[] {
-  const file = files.find((f) => f.toLowerCase() === 'button-area.md');
-  if (!file) return [];
-
-  const raw = readFileSync(join(pagePath, file), 'utf-8');
-  const parsed = parseMarkdown(raw);
-
-  const buttons: Button[] = [];
-  for (const table of parsed.tables) {
-    if (table.rows.length === 0) continue;
-
-    if (isKeyValueTable(table)) {
-      const kv = extractKeyValueTable(table);
-      if (Object.keys(kv).length === 0) continue;
-
+  return parseArea<Button>(files, pagePath, pageId, {
+    fileName: 'button-area.md',
+    idPrefix: 'button',
+    fromKV(kv) {
       const buttonName = kv['按钮名称'] || kv['操作名称'] || '';
-      if (!buttonName) continue;
-
-      buttons.push({
-        id: `${pageId}/button/${buttons.length}`,
-        pageId,
+      if (!buttonName) return null;
+      return {
+        id: '',
+        pageId: '',
         buttonName,
         scope: kv['作用域'] || kv['操作类型'] || '',
         position: kv['位置'] || '',
@@ -236,29 +236,24 @@ function parseButtonArea(files: string[], pagePath: string, pageId: string): But
         disabledCondition: kv['禁用条件'] || '',
         clickResult: kv['点击结果'] || kv['关联操作'] || '',
         confirmRequired: (kv['确认弹窗'] || '').trim() === '是',
-      });
-    } else {
-      for (let i = 0; i < table.rows.length; i++) {
-        const row = table.rows[i];
-        const buttonName = row['按钮名称'] || '';
-        if (!buttonName) continue;
-
-        buttons.push({
-          id: `${pageId}/button/${buttons.length}`,
-          pageId,
-          buttonName,
-          scope: row['作用域'] || row['操作类型'] || '',
-          position: row['位置'] || '',
-          displayCondition: row['显示条件'] || '',
-          disabledCondition: row['禁用条件'] || '',
-          clickResult: row['点击结果'] || row['关联操作'] || '',
-          confirmRequired: (row['确认弹窗'] || '').trim() === '是',
-        });
-      }
-    }
-  }
-
-  return buttons;
+      };
+    },
+    fromRow(row) {
+      const buttonName = row['按钮名称'] || '';
+      if (!buttonName) return null;
+      return {
+        id: '',
+        pageId: '',
+        buttonName,
+        scope: row['作用域'] || row['操作类型'] || '',
+        position: row['位置'] || '',
+        displayCondition: row['显示条件'] || '',
+        disabledCondition: row['禁用条件'] || '',
+        clickResult: row['点击结果'] || row['关联操作'] || '',
+        confirmRequired: (row['确认弹窗'] || '').trim() === '是',
+      };
+    },
+  });
 }
 
 function parseAPIs(files: string[], pagePath: string, _pageId: string): API[] {
