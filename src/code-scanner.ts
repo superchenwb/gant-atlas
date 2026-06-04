@@ -156,7 +156,8 @@ export async function scanSchema(schemaFile: string): Promise<{
   const columns: SchemaColumn[] = [];
 
   // Extract searchSchema fields by tracking brace depth to handle nested options
-  const searchSchemaMatch = raw.match(/export\s+const\s+searchSchema\s*=\s*\{([\s\S]*?)\};/);
+  // Supports type annotations: export const searchSchema: SearchFormSchema = { ... };
+  const searchSchemaMatch = raw.match(/export\s+const\s+searchSchema[^=]*=\s*\{([\s\S]*?)\};/);
   if (searchSchemaMatch) {
     const searchBody = searchSchemaMatch[1];
     const propRegex = /(\w+):\s*\{/g;
@@ -185,7 +186,8 @@ export async function scanSchema(schemaFile: string): Promise<{
   }
 
   // Extract gridSchema columns by tracking brace depth
-  const gridSchemaMatch = raw.match(/export\s+const\s+gridSchema\s*=\s*(\[[\s\S]*?\]);/);
+  // Supports type annotations: export const gridSchema: ColumnDefs<any> = [...];
+  const gridSchemaMatch = raw.match(/export\s+const\s+gridSchema[^=]*=\s*(\[[\s\S]*?\]);/);
   if (gridSchemaMatch) {
     const gridBody = gridSchemaMatch[1];
     let i = 0;
@@ -204,11 +206,17 @@ export async function scanSchema(schemaFile: string): Promise<{
       const titleMatch = block.match(/title:\s*(?:tr\()?['"]([^'"]*)['"]/);
       const ctMatch = block.match(/componentType:\s*(?:tr\()?['"]([^'"]*)['"]/);
       if (fieldNameMatch) {
-        columns.push({
-          fieldName: fieldNameMatch[1],
-          title: titleMatch ? titleMatch[1] : undefined,
-          componentType: ctMatch ? ctMatch[1] : undefined,
-        });
+        const existingColumn = columns.find((c) => c.fieldName === fieldNameMatch[1]);
+        if (existingColumn) {
+          if (titleMatch) existingColumn.title = titleMatch[1];
+          if (ctMatch) existingColumn.componentType = ctMatch[1];
+        } else {
+          columns.push({
+            fieldName: fieldNameMatch[1],
+            title: titleMatch ? titleMatch[1] : undefined,
+            componentType: ctMatch ? ctMatch[1] : undefined,
+          });
+        }
       }
       i = end;
     }
@@ -300,38 +308,49 @@ async function scanSchemaAST(
         // gridSchema = [ ... ]
         if (ts.isIdentifier(decl.name) && decl.name.text === 'gridSchema' && decl.initializer && ts.isArrayLiteralExpression(decl.initializer)) {
           for (const element of decl.initializer.elements) {
-            if (ts.isObjectLiteralExpression(element)) {
-              let fieldName: string | undefined;
-              let title: string | undefined;
-              let componentType: string | undefined;
-              let options: Record<string, unknown> | undefined;
+            let objNode: import('typescript').ObjectLiteralExpression | null = null;
 
-              for (const prop of element.properties) {
-                if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
-                  if (prop.name.text === 'fieldName') {
-                    const val = extractStringLiteral(ts, prop.initializer);
-                    if (val !== undefined) fieldName = val;
-                  } else if (prop.name.text === 'title') {
-                    const val = extractStringLiteral(ts, prop.initializer);
-                    if (val !== undefined) title = val;
-                  } else if (prop.name.text === 'componentType') {
-                    const val = extractStringLiteral(ts, prop.initializer);
-                    if (val !== undefined) componentType = val;
-                  } else if (prop.name.text === 'options' && ts.isObjectLiteralExpression(prop.initializer)) {
-                    options = extractOptions(ts, prop.initializer);
-                  }
+            // Direct object literal: { fieldName: '...', title: '...' }
+            if (ts.isObjectLiteralExpression(element)) {
+              objNode = element;
+            }
+            // Call expression wrapping: getCodeListColumn({ ... }) or getLevelColumn({ ... })
+            if (ts.isCallExpression(element) && element.arguments.length > 0 && ts.isObjectLiteralExpression(element.arguments[0])) {
+              objNode = element.arguments[0];
+            }
+
+            if (!objNode) continue;
+
+            let fieldName: string | undefined;
+            let title: string | undefined;
+            let componentType: string | undefined;
+            let options: Record<string, unknown> | undefined;
+
+            for (const prop of objNode.properties) {
+              if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+                if (prop.name.text === 'fieldName') {
+                  const val = extractStringLiteral(ts, prop.initializer);
+                  if (val !== undefined) fieldName = val;
+                } else if (prop.name.text === 'title') {
+                  const val = extractStringLiteral(ts, prop.initializer);
+                  if (val !== undefined) title = val;
+                } else if (prop.name.text === 'componentType') {
+                  const val = extractStringLiteral(ts, prop.initializer);
+                  if (val !== undefined) componentType = val;
+                } else if (prop.name.text === 'options' && ts.isObjectLiteralExpression(prop.initializer)) {
+                  options = extractOptions(ts, prop.initializer);
                 }
               }
+            }
 
-              if (fieldName) {
-                const existingColumn = columns.find((c) => c.fieldName === fieldName);
-                if (existingColumn) {
-                  if (title !== undefined) existingColumn.title = title;
-                  if (componentType !== undefined) existingColumn.componentType = componentType;
-                  if (options !== undefined) existingColumn.options = options;
-                } else {
-                  columns.push({ fieldName, title, componentType, options });
-                }
+            if (fieldName) {
+              const existingColumn = columns.find((c) => c.fieldName === fieldName);
+              if (existingColumn) {
+                if (title !== undefined) existingColumn.title = title;
+                if (componentType !== undefined) existingColumn.componentType = componentType;
+                if (options !== undefined) existingColumn.options = options;
+              } else {
+                columns.push({ fieldName, title, componentType, options });
               }
             }
           }
