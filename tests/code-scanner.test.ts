@@ -21,12 +21,56 @@ describe('scanSchema', () => {
     const result = await scanSchema(schemaFile);
 
     expect(result.fields.length).toBe(2);
-    expect(result.fields[0]).toEqual({ name: 'userName', title: '用户名' });
-    expect(result.fields[1]).toEqual({ name: 'status', title: '状态' });
+    expect(result.fields[0]).toEqual({ name: 'userName', title: '用户名', componentType: 'Input' });
+    expect(result.fields[1]).toEqual({ name: 'status', title: '状态', componentType: 'Select' });
 
     expect(result.columns.length).toBe(2);
     expect(result.columns[0]).toEqual({ fieldName: 'userName', title: '用户名' });
     expect(result.columns[1]).toEqual({ fieldName: 'status', title: '状态标签' });
+  });
+
+  it('extracts componentType and options from rich schema', async () => {
+    const schemaFile = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'rich-schema-page', 'schema.ts');
+    const result = await scanSchema(schemaFile);
+
+    // fields
+    expect(result.fields.length).toBe(9);
+
+    const materialCode = result.fields.find((f) => f.name === 'materialCode');
+    expect(materialCode).toEqual({ name: 'materialCode', title: '物料编码', componentType: 'Input' });
+
+    const status = result.fields.find((f) => f.name === 'status');
+    expect(status).toEqual({
+      name: 'status',
+      title: '状态',
+      componentType: 'CodeList',
+      options: { codeType: 'MATERIAL_STATUS' },
+    });
+
+    const orgId = result.fields.find((f) => f.name === 'orgId');
+    expect(orgId).toEqual({
+      name: 'orgId',
+      title: '组织',
+      componentType: 'TreeSelect',
+      options: { treeType: 'ORG', multiple: true },
+    });
+
+    const unknownField = result.fields.find((f) => f.name === 'unknownField');
+    expect(unknownField).toEqual({ name: 'unknownField', title: '未知组件' });
+
+    // columns
+    expect(result.columns.length).toBe(3);
+
+    const statusCol = result.columns.find((c) => c.fieldName === 'status');
+    expect(statusCol).toEqual({
+      fieldName: 'status',
+      title: '状态',
+      componentType: 'CodeList',
+      options: { codeType: 'MATERIAL_STATUS' },
+    });
+
+    const createDateCol = result.columns.find((c) => c.fieldName === 'createDate');
+    expect(createDateCol).toEqual({ fieldName: 'createDate', title: '创建日期' });
   });
 });
 

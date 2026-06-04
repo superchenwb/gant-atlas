@@ -1,9 +1,10 @@
 import { createHash } from 'crypto';
-import { readdirSync, readFileSync, statSync } from 'fs';
-import { join } from 'path';
+import { readdirSync, readFileSync, statSync, mkdirSync, writeFileSync, existsSync } from 'fs';
+import { join, basename } from 'path';
 import { buildGraphAsync } from '../graph/builder.js';
 import { createStore } from '../store/sqlite.js';
-import { buildMapping } from '../code-scanner.js';
+import { buildMapping, scanRoutes, scanPageDir, resolveComponentPath } from '../code-scanner.js';
+import { generatePageSkeleton } from '../generator.js';
 import { runConsistencyChecks } from '../mcp/tools/check-consistency.js';
 import type { CodeToSpecMapping } from '../code-scanner.js';
 
@@ -151,4 +152,68 @@ export function computePageHash(pagePath: string): string {
   }
 
   return hash.digest('hex');
+}
+
+export interface GenerateResult {
+  generated: string[];
+  skipped: string[];
+}
+
+export async function runGenerate(options: {
+  codeDir: string;
+  routesFile: string;
+  docsPath: string;
+  page?: string;
+  force?: boolean;
+  dryRun?: boolean;
+}): Promise<GenerateResult> {
+  const routes = await scanRoutes(options.routesFile);
+  const generated: string[] = [];
+  const skipped: string[] = [];
+
+  for (const route of routes) {
+    const componentPath = resolveComponentPath(route.component, options.codeDir);
+    if (!componentPath) continue;
+
+    const pageName = basename(componentPath);
+    const moduleName = basename(join(componentPath, '..'));
+    const pageId = `${moduleName}/${pageName}`;
+
+    if (options.page && options.page !== pageId) continue;
+
+    const pageDir = join(options.docsPath, moduleName, pageName);
+    const info = await scanPageDir(componentPath, moduleName, pageName);
+    const skeleton = generatePageSkeleton(info, route);
+
+    const files: Record<string, string> = {
+      'main.md': skeleton.mainMd,
+      'search-area.md': skeleton.searchAreaMd,
+      'grid-area.md': skeleton.gridAreaMd,
+      'button-area.md': skeleton.buttonAreaMd,
+    };
+
+    for (const [fileName, content] of Object.entries(files)) {
+      if (!content) continue;
+
+      const filePath = join(pageDir, fileName);
+
+      if (options.dryRun) {
+        console.log(`\n--- ${filePath} ---\n${content}`);
+        generated.push(filePath);
+        continue;
+      }
+
+      const exists = existsSync(filePath);
+      if (exists && !options.force) {
+        skipped.push(filePath);
+        continue;
+      }
+
+      mkdirSync(pageDir, { recursive: true });
+      writeFileSync(filePath, content, 'utf-8');
+      generated.push(filePath);
+    }
+  }
+
+  return { generated, skipped };
 }

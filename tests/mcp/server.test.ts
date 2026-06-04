@@ -40,6 +40,7 @@ describe('createServer', () => {
       'search_pages',
       'analyze_impact',
       'check_consistency',
+      'generate_page_spec',
       'list_projects',
     ]);
   });
@@ -122,5 +123,49 @@ describe('createServer', () => {
     const text = (result.content as Array<{ text: string }>)[0].text;
     expect(text).toContain('Unknown tool');
     expect(result.isError).toBe(true);
+  });
+
+  it('returns error for generate_page_spec when codeDir is not configured', async () => {
+    const config: ServerConfig = {
+      projects: [{ id: 'p1', name: 'P1', docsPath: '/docs', dbPath }],
+    };
+    const { client } = await createClientServer(config);
+
+    const result = await client.callTool({
+      name: 'generate_page_spec',
+      arguments: { projectId: 'p1', pageId: 'test-module/simple-page' },
+    });
+
+    const text = (result.content as Array<{ text: string }>)[0].text;
+    expect(text).toContain('codeDir');
+    expect(result.isError).toBe(true);
+  });
+
+  it('calls generate_page_spec successfully when configured', async () => {
+    const fixturesDir = join(process.cwd(), 'tests', 'fixtures');
+    const config: ServerConfig = {
+      projects: [
+        {
+          id: 'p1',
+          name: 'P1',
+          docsPath: '/docs',
+          dbPath,
+          codeDir: join(fixturesDir, 'test-module'),
+          routesFile: join(fixturesDir, 'routes-maps.ts'),
+        },
+      ],
+    };
+    const { client } = await createClientServer(config);
+
+    const result = await client.callTool({
+      name: 'generate_page_spec',
+      arguments: { projectId: 'p1', pageId: 'test-module/simple-page' },
+    });
+
+    const text = (result.content as Array<{ text: string }>)[0].text;
+    expect(text).toContain('# 测试页面');
+    expect(text).toContain('## 查询条件');
+    expect(text).toContain('## 表格列');
+    expect(text).toContain('## 按钮区域');
   });
 });

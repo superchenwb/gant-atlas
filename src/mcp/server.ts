@@ -11,12 +11,15 @@ import { handleSearchPages } from './tools/search-pages.js';
 import { handleAnalyzeImpact } from './tools/analyze-impact.js';
 import { handleCheckConsistency } from './tools/check-consistency.js';
 import { handleListProjects } from './tools/list-projects.js';
+import { handleGeneratePageSpec } from './tools/generate-page-spec.js';
 
 export interface ProjectConfig {
   id: string;
   name: string;
   docsPath: string;
   dbPath: string;
+  codeDir?: string;
+  routesFile?: string;
 }
 
 export interface ServerConfig {
@@ -103,6 +106,18 @@ export function createServer(config: ServerConfig): Server {
           },
         },
         {
+          name: 'generate_page_spec',
+          description: '根据代码自动生成指定页面的 feature-doc Markdown 骨架',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectId: { type: 'string', description: '项目 ID' },
+              pageId: { type: 'string', description: '页面 ID（格式：module/pageName）' },
+            },
+            required: ['projectId', 'pageId'],
+          },
+        },
+        {
           name: 'list_projects',
           description: '列出所有已配置的项目',
           inputSchema: {
@@ -139,6 +154,8 @@ export function createServer(config: ServerConfig): Server {
 
       const store = getStore(projectId)!;
 
+      const project = projectMap.get(projectId!);
+
       switch (name) {
         case 'get_page_spec':
           return await handleGetPageSpec(store, args);
@@ -148,6 +165,8 @@ export function createServer(config: ServerConfig): Server {
           return await handleAnalyzeImpact(store, args);
         case 'check_consistency':
           return await handleCheckConsistency(store, args);
+        case 'generate_page_spec':
+          return await handleGeneratePageSpec(store, args, project?.codeDir, project?.routesFile);
         default:
           return {
             content: [

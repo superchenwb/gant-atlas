@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { join } from 'path';
 import { serve } from './mcp/server.js';
-import { runIngest, runQueryPage, runMap, runValidate } from './cli/actions.js';
+import { runIngest, runQueryPage, runMap, runValidate, runGenerate } from './cli/actions.js';
 import { setupCommand } from './cli/setup.js';
 
 const program = new Command();
@@ -100,6 +100,23 @@ program
 
     if (result.hasIssues) {
       process.exit(1);
+    }
+  });
+
+program
+  .command('generate')
+  .description('根据代码自动生成 feature-doc 骨架')
+  .requiredOption('--codeDir <path>', '代码根目录路径')
+  .requiredOption('--routesFile <path>', '路由配置文件路径')
+  .requiredOption('--docsPath <path>', '功能清单输出目录路径')
+  .option('--page <pageId>', '仅生成指定页面（格式：module/pageName）')
+  .option('--force', '强制覆盖已有文件')
+  .option('--dry-run', '预览生成内容，不写入磁盘')
+  .action(async (options: { codeDir: string; routesFile: string; docsPath: string; page?: string; force?: boolean; dryRun?: boolean }) => {
+    const result = await runGenerate(options);
+    console.error(`[gant-atlas] 生成完成: ${result.generated.length} 个文件, 跳过 ${result.skipped.length} 个已有文件`);
+    if (result.skipped.length > 0 && !options.force) {
+      console.error(`[gant-atlas] 提示: 使用 --force 可覆盖已有文件`);
     }
   });
 

@@ -8,13 +8,27 @@ export interface RouteMapping {
   title?: string;
 }
 
+export interface SchemaField {
+  name: string;
+  title?: string;
+  componentType?: string;
+  options?: Record<string, unknown>;
+}
+
+export interface SchemaColumn {
+  fieldName: string;
+  title?: string;
+  componentType?: string;
+  options?: Record<string, unknown>;
+}
+
 export interface PageCodeInfo {
   pageDir: string;
   module: string;
   pageName: string;
   route?: string;
-  fields: Array<{ name: string; title?: string }>;
-  columns: Array<{ fieldName: string; title?: string }>;
+  fields: SchemaField[];
+  columns: SchemaColumn[];
   apis: string[];
 }
 
@@ -129,75 +143,155 @@ async function scanRoutesAST(raw: string): Promise<RouteMapping[]> {
 }
 
 /**
- * 从 schema.ts 提取字段定义
- * 正则作为快速路径；当正则无法匹配时自动回退到 TypeScript AST 解析
+ * 从 schema.ts 提取字段定义（含控件类型和选项）
+ * 正则作为快速路径；当正则无法匹配或缺少 componentType 时自动回退到 TypeScript AST 解析
  */
 export async function scanSchema(schemaFile: string): Promise<{
-  fields: Array<{ name: string; title?: string }>;
-  columns: Array<{ fieldName: string; title?: string }>;
+  fields: SchemaField[];
+  columns: SchemaColumn[];
 }> {
   const raw = readFileSync(schemaFile, 'utf-8');
 
-  const fields: Array<{ name: string; title?: string }> = [];
-  const columns: Array<{ fieldName: string; title?: string }> = [];
+  const fields: SchemaField[] = [];
+  const columns: SchemaColumn[] = [];
 
-  // Extract searchSchema fields: fieldName: { title: tr('...'), ... }
+  // Extract searchSchema fields by tracking brace depth to handle nested options
   const searchSchemaMatch = raw.match(/export\s+const\s+searchSchema\s*=\s*\{([\s\S]*?)\};/);
   if (searchSchemaMatch) {
     const searchBody = searchSchemaMatch[1];
-    const fieldRegex = /(\w+):\s*\{[\s\S]*?title:\s*(?:tr\()?['"]([^'"]*)['"]/g;
-    let fm: RegExpExecArray | null;
-    while ((fm = fieldRegex.exec(searchBody)) !== null) {
-      fields.push({ name: fm[1], title: fm[2] });
+    const propRegex = /(\w+):\s*\{/g;
+    let pm: RegExpExecArray | null;
+    let lastEnd = 0;
+    while ((pm = propRegex.exec(searchBody)) !== null) {
+      if (pm.index < lastEnd) continue; // skip nested matches inside previous block
+      const start = pm.index + pm[0].length;
+      let braceDepth = 1;
+      let end = start;
+      while (braceDepth > 0 && end < searchBody.length) {
+        if (searchBody[end] === '{') braceDepth++;
+        else if (searchBody[end] === '}') braceDepth--;
+        end++;
+      }
+      lastEnd = end;
+      const block = searchBody.slice(start, end - 1);
+      const titleMatch = block.match(/title:\s*(?:tr\()?['"]([^'"]*)['"]/);
+      const ctMatch = block.match(/componentType:\s*(?:tr\()?['"]([^'"]*)['"]/);
+      fields.push({
+        name: pm[1],
+        title: titleMatch ? titleMatch[1] : undefined,
+        componentType: ctMatch ? ctMatch[1] : undefined,
+      });
     }
   }
 
-  // Extract gridSchema columns: { fieldName: '...', title: tr('...'), ... }
+  // Extract gridSchema columns by tracking brace depth
   const gridSchemaMatch = raw.match(/export\s+const\s+gridSchema\s*=\s*(\[[\s\S]*?\]);/);
   if (gridSchemaMatch) {
     const gridBody = gridSchemaMatch[1];
-    const colRegex = /\{[\s\S]*?fieldName:\s*['"]([^'"]*)['"][\s\S]*?title:\s*(?:tr\()?['"]([^'"]*)['"]/g;
-    let cm: RegExpExecArray | null;
-    while ((cm = colRegex.exec(gridBody)) !== null) {
-      columns.push({ fieldName: cm[1], title: cm[2] });
+    let i = 0;
+    while (i < gridBody.length) {
+      const openBrace = gridBody.indexOf('{', i);
+      if (openBrace === -1) break;
+      let braceDepth = 1;
+      let end = openBrace + 1;
+      while (braceDepth > 0 && end < gridBody.length) {
+        if (gridBody[end] === '{') braceDepth++;
+        else if (gridBody[end] === '}') braceDepth--;
+        end++;
+      }
+      const block = gridBody.slice(openBrace + 1, end - 1);
+      const fieldNameMatch = block.match(/fieldName:\s*['"]([^'"]*)['"]/);
+      const titleMatch = block.match(/title:\s*(?:tr\()?['"]([^'"]*)['"]/);
+      const ctMatch = block.match(/componentType:\s*(?:tr\()?['"]([^'"]*)['"]/);
+      if (fieldNameMatch) {
+        columns.push({
+          fieldName: fieldNameMatch[1],
+          title: titleMatch ? titleMatch[1] : undefined,
+          componentType: ctMatch ? ctMatch[1] : undefined,
+        });
+      }
+      i = end;
     }
   }
 
-  // AST fallback when regex yields nothing for either section
-  if (fields.length === 0 || columns.length === 0) {
-    return scanSchemaAST(raw, fields, columns);
-  }
+  // AST fallback always runs to supplement options and catch anything regex missed.
+  // Regex provides a fast path for name/title/componentType; AST enriches with options.
+  return scanSchemaAST(raw, fields, columns);
+}
 
-  return { fields, columns };
+function extractOptionValue(ts: typeof import('typescript'), node: import('typescript').Node): unknown {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  if (ts.isNumericLiteral(node)) {
+    return Number(node.text);
+  }
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (ts.isArrayLiteralExpression(node)) {
+    return node.elements.map((e) => extractOptionValue(ts, e)).filter((v) => v !== undefined);
+  }
+  return undefined;
+}
+
+function extractOptions(ts: typeof import('typescript'), node: import('typescript').ObjectLiteralExpression): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
+  for (const prop of node.properties) {
+    if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+      const val = extractOptionValue(ts, prop.initializer);
+      if (val !== undefined) {
+        options[prop.name.text] = val;
+      }
+    }
+  }
+  return options;
 }
 
 async function scanSchemaAST(
   raw: string,
-  existingFields: Array<{ name: string; title?: string }>,
-  existingColumns: Array<{ fieldName: string; title?: string }>
+  existingFields: SchemaField[],
+  existingColumns: SchemaColumn[]
 ): Promise<{
-  fields: Array<{ name: string; title?: string }>;
-  columns: Array<{ fieldName: string; title?: string }>;
+  fields: SchemaField[];
+  columns: SchemaColumn[];
 }> {
   const ts = await import('typescript');
   const sourceFile = ts.createSourceFile('schema.ts', raw, ts.ScriptTarget.Latest, true);
 
-  const fields = existingFields.length > 0 ? existingFields : [] as Array<{ name: string; title?: string }>;
-  const columns = existingColumns.length > 0 ? existingColumns : [] as Array<{ fieldName: string; title?: string }>;
+  const fields = existingFields.length > 0 ? existingFields : [] as SchemaField[];
+  const columns = existingColumns.length > 0 ? existingColumns : [] as SchemaColumn[];
 
   function visit(node: import('typescript').Node) {
-    // searchSchema = { ... }
     if (ts.isVariableStatement(node)) {
       for (const decl of node.declarationList.declarations) {
+        // searchSchema = { ... }
         if (ts.isIdentifier(decl.name) && decl.name.text === 'searchSchema' && decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
           for (const prop of decl.initializer.properties) {
-            if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
-              const propName = prop.name;
-              const title = extractStringLiteral(ts, prop.initializer);
-              if (title !== undefined) {
-                if (!fields.some((f) => f.name === propName.text)) {
-                  fields.push({ name: propName.text, title });
+            if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && ts.isObjectLiteralExpression(prop.initializer)) {
+              const propName = prop.name.text;
+              let title: string | undefined;
+              let componentType: string | undefined;
+              let options: Record<string, unknown> | undefined;
+
+              for (const innerProp of prop.initializer.properties) {
+                if (ts.isPropertyAssignment(innerProp) && ts.isIdentifier(innerProp.name)) {
+                  if (innerProp.name.text === 'title') {
+                    title = extractStringLiteral(ts, innerProp.initializer);
+                  } else if (innerProp.name.text === 'componentType') {
+                    componentType = extractStringLiteral(ts, innerProp.initializer);
+                  } else if (innerProp.name.text === 'options' && ts.isObjectLiteralExpression(innerProp.initializer)) {
+                    options = extractOptions(ts, innerProp.initializer);
+                  }
                 }
+              }
+
+              const existingField = fields.find((f) => f.name === propName);
+              if (existingField) {
+                if (title !== undefined) existingField.title = title;
+                if (componentType !== undefined) existingField.componentType = componentType;
+                if (options !== undefined) existingField.options = options;
+              } else {
+                fields.push({ name: propName, title, componentType, options });
               }
             }
           }
@@ -209,6 +303,9 @@ async function scanSchemaAST(
             if (ts.isObjectLiteralExpression(element)) {
               let fieldName: string | undefined;
               let title: string | undefined;
+              let componentType: string | undefined;
+              let options: Record<string, unknown> | undefined;
+
               for (const prop of element.properties) {
                 if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
                   if (prop.name.text === 'fieldName') {
@@ -217,11 +314,24 @@ async function scanSchemaAST(
                   } else if (prop.name.text === 'title') {
                     const val = extractStringLiteral(ts, prop.initializer);
                     if (val !== undefined) title = val;
+                  } else if (prop.name.text === 'componentType') {
+                    const val = extractStringLiteral(ts, prop.initializer);
+                    if (val !== undefined) componentType = val;
+                  } else if (prop.name.text === 'options' && ts.isObjectLiteralExpression(prop.initializer)) {
+                    options = extractOptions(ts, prop.initializer);
                   }
                 }
               }
-              if (fieldName && !columns.some((c) => c.fieldName === fieldName)) {
-                columns.push({ fieldName, title });
+
+              if (fieldName) {
+                const existingColumn = columns.find((c) => c.fieldName === fieldName);
+                if (existingColumn) {
+                  if (title !== undefined) existingColumn.title = title;
+                  if (componentType !== undefined) existingColumn.componentType = componentType;
+                  if (options !== undefined) existingColumn.options = options;
+                } else {
+                  columns.push({ fieldName, title, componentType, options });
+                }
               }
             }
           }
