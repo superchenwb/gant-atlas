@@ -1,6 +1,6 @@
 {
   "name": "gant-atlas",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "业务知识图谱引擎 — 将 feature-docs 解析为可查询的业务关系图",
   "type": "module",
   "main": "dist/index.js",

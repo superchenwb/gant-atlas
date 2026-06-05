@@ -56,6 +56,14 @@ Updated after implementation on 2026-06-02
   - 重构 `buildGraphAsync` 为不可变收集模式（return sub-arrays then flat）
   - 文件：`src/graph/builder.ts`
 
+## Completed (v0.2.0)
+
+- [x] **Review fixes — CJK FTS / indirectEffects / formatToolResult** (P2)
+  - CJK 搜索自动单字 tokenization + LIKE 回退
+  - `indirectEffects` BFS 去重（`indirectEffectIds` Set）
+  - 新增 `formatToolResult()` 统一成功响应
+  - 文件：`src/store/sqlite.ts`, `src/mcp/tools/analyze-impact.ts`, `src/mcp/tools/error.ts`
+
 ## Deferred (Phase 2)
 
 - [ ] **check_consistency MCP 工具扩展** (P1, deferred)
