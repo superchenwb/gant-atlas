@@ -183,6 +183,9 @@ function analyzeApiImpact(
   // BFS from the API node (reverse: who calls this API)
   let queue: Array<{ id: string; depth: number }> = [{ id: apiNode.id, depth: 0 }];
 
+  // Load edges once — O(E) instead of O(N×E) when called inside the loop
+  const allEdges = store.listEdges();
+
   while (queue.length > 0) {
     const { id, depth } = queue.shift()!;
     if (visited.has(id)) continue;
@@ -198,7 +201,6 @@ function analyzeApiImpact(
     if (depth >= maxDepth) continue;
 
     // Find all edges pointing TO this node (reverse traversal)
-    const allEdges = store.listEdges();
     for (const e of allEdges) {
       if (e.target === id) {
         if (!visited.has(e.source)) {
@@ -239,51 +241,7 @@ function buildPageImpactGraph(
   pageId: string,
   maxDepth: number
 ): { nodes: GraphNode[]; edges: GraphEdge[] } {
-  const visitedNodes = new Set<string>();
-  const visitedEdges = new Set<string>();
-  const resultNodes: GraphNode[] = [];
-  const resultEdges: GraphEdge[] = [];
-
-  let queue: Array<{ id: string; depth: number }> = [{ id: pageId, depth: 0 }];
-
-  while (queue.length > 0) {
-    const { id, depth } = queue.shift()!;
-    if (visitedNodes.has(id)) continue;
-    visitedNodes.add(id);
-
-    const node = store.getNodeById(id);
-    if (node) resultNodes.push(node);
-
-    if (depth >= maxDepth) continue;
-
-    // Outgoing edges
-    const outEdges = store.getEdgesFromSource(id);
-    for (const e of outEdges) {
-      const edgeKey = `${e.source}-${e.target}-${e.type}`;
-      if (!visitedEdges.has(edgeKey)) {
-        visitedEdges.add(edgeKey);
-        resultEdges.push(e);
-      }
-      if (!visitedNodes.has(e.target)) {
-        queue.push({ id: e.target, depth: depth + 1 });
-      }
-    }
-
-    // Incoming edges (who references this node)
-    const inEdges = store.getEdgesToTarget(id);
-    for (const e of inEdges) {
-      const edgeKey = `${e.source}-${e.target}-${e.type}`;
-      if (!visitedEdges.has(edgeKey)) {
-        visitedEdges.add(edgeKey);
-        resultEdges.push(e);
-      }
-      if (!visitedNodes.has(e.source)) {
-        queue.push({ id: e.source, depth: depth + 1 });
-      }
-    }
-  }
-
-  return { nodes: resultNodes, edges: resultEdges };
+  return store.getCallGraph(pageId, maxDepth);
 }
 
 function computeRiskLevel(pageCount: number, apiCount: number): 'LOW' | 'MEDIUM' | 'HIGH' {

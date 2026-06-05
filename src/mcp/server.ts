@@ -34,7 +34,7 @@ export function createServer(config: ServerConfig): Server {
   const server = new Server(
     {
       name: 'gant-atlas',
-      version: '0.1.0',
+      version: '0.2.0',
     },
     {
       capabilities: {
@@ -55,6 +55,35 @@ export function createServer(config: ServerConfig): Server {
     return storeMap.get(projectId);
   }
 
+  // Shared output schema — all tools return { success, data/error, meta } via formatToolResult/formatToolError
+  const outputSchema = {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' as const, description: 'Whether the tool call succeeded' },
+      data: { type: 'object' as const, description: 'Response payload on success' },
+      error: {
+        type: 'object' as const,
+        description: 'Error details on failure',
+        properties: {
+          code: { type: 'string' as const, enum: ['invalid_input', 'not_found', 'too_large', 'internal_error', 'fts_unavailable'] },
+          message: { type: 'string' as const },
+          details: { type: 'string' as const },
+        },
+      },
+      meta: {
+        type: 'object' as const,
+        description: 'Response metadata',
+        properties: {
+          timestamp: { type: 'string' as const, format: 'date-time' },
+          count: { type: 'number' as const },
+          durationMs: { type: 'number' as const },
+        },
+      },
+    },
+  };
+
+  const readOnlyAnnotations = { readOnlyHint: true, idempotentHint: true };
+
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [
@@ -72,6 +101,8 @@ AFTER THIS: 使用 analyze_impact 评估修改该页面相关字段或接口的�
             },
             required: ['projectId', 'pageId'],
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
         {
           name: 'search_pages',
@@ -88,6 +119,8 @@ AFTER THIS: 使用 get_page_spec 查看匹配页面的详细规格。`,
             },
             required: ['projectId', 'keyword'],
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
         {
           name: 'analyze_impact',
@@ -106,6 +139,8 @@ AFTER THIS: 使用 get_call_graph 查看完整的上下游调用链。`,
             },
             required: ['projectId'],
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
         {
           name: 'check_consistency',
@@ -121,6 +156,7 @@ AFTER THIS: 使用 find_dead_apis 清理已确认冗余的 API。`,
             },
             required: ['projectId'],
           },
+          outputSchema,
         },
         {
           name: 'generate_page_spec',
@@ -136,6 +172,8 @@ AFTER THIS: 使用 check_consistency 验证生成的文档与实际代码的一�
             },
             required: ['projectId', 'pageId'],
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
         {
           name: 'list_entries',
@@ -151,6 +189,8 @@ AFTER THIS: 使用 search_pages 或 explore_context 深入查看特定实体。`
             },
             required: ['projectId'],
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
         {
           name: 'list_projects',
@@ -161,6 +201,8 @@ WHEN TO USE: 当你需要查看当前可用的项目列表时使用。`,
             type: 'object',
             properties: {},
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
         {
           name: 'explore_context',
@@ -179,6 +221,8 @@ AFTER THIS: 使用 get_page_spec 查看具体页面的详细规格，或使用 a
             },
             required: ['projectId', 'query'],
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
         {
           name: 'get_call_graph',
@@ -196,6 +240,8 @@ AFTER THIS: 使用 analyze_impact 评估变更对上下游的影响范围。`,
             },
             required: ['projectId', 'nodeId'],
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
         {
           name: 'find_dead_apis',
@@ -210,6 +256,8 @@ AFTER THIS: 使用 analyze_impact 确认删除死 API 是否会影响其他模�
             },
             required: ['projectId'],
           },
+          outputSchema,
+          annotations: readOnlyAnnotations,
         },
       ],
     };

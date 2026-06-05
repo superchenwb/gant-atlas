@@ -129,6 +129,52 @@ describe('createServer', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('all tools declare outputSchema and annotations', async () => {
+    const config: ServerConfig = {
+      projects: [{ id: 'p1', name: 'P1', docsPath: '/docs', dbPath }],
+    };
+    const { client } = await createClientServer(config);
+
+    const result = await client.listTools();
+    for (const tool of result.tools) {
+      expect(tool.outputSchema, `tool ${tool.name} should declare outputSchema`).toBeDefined();
+      expect(tool.outputSchema?.type).toBe('object');
+      if (tool.name !== 'check_consistency') {
+        expect(tool.annotations?.readOnlyHint, `tool ${tool.name} should have annotations`).toBe(true);
+      }
+    }
+  });
+
+  it('tool responses conform to outputSchema structure', async () => {
+    const config: ServerConfig = {
+      projects: [{ id: 'p1', name: 'P1', docsPath: '/docs', dbPath }],
+    };
+    const { client } = await createClientServer(config);
+
+    const result = await client.callTool({
+      name: 'get_page_spec',
+      arguments: { projectId: 'p1', pageId: 'mod/page' },
+    });
+
+    const text = (result.content as Array<{ text: string }>)[0].text;
+    const parsed = JSON.parse(text);
+
+    // Verify outputSchema contract: { success, data|error, meta }
+    expect(parsed).toHaveProperty('success');
+    expect(typeof parsed.success).toBe('boolean');
+    expect(parsed).toHaveProperty('meta');
+    expect(parsed.meta).toHaveProperty('timestamp');
+
+    if (parsed.success) {
+      expect(parsed).toHaveProperty('data');
+      expect(parsed).not.toHaveProperty('error');
+    } else {
+      expect(parsed).toHaveProperty('error');
+      expect(parsed.error).toHaveProperty('code');
+      expect(parsed.error).toHaveProperty('message');
+    }
+  });
+
   it('returns error for generate_page_spec when codeDir is not configured', async () => {
     const config: ServerConfig = {
       projects: [{ id: 'p1', name: 'P1', docsPath: '/docs', dbPath }],
