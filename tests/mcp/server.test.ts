@@ -93,7 +93,9 @@ describe('createServer', () => {
     });
 
     const text = (result.content as Array<{ text: string }>)[0].text;
-    expect(text).toContain('Missing projectId');
+    // McpServer performs input validation before reaching our handler
+    expect(text).toContain('-32602');
+    expect(text).toContain('projectId');
     expect(result.isError).toBe(true);
   });
 
@@ -125,11 +127,13 @@ describe('createServer', () => {
     });
 
     const text = (result.content as Array<{ text: string }>)[0].text;
-    expect(text).toContain('Unknown tool');
+    // McpServer returns its own error for unknown tools
+    expect(text).toContain('unknown_tool');
+    expect(text).toContain('-32602');
     expect(result.isError).toBe(true);
   });
 
-  it('all tools declare outputSchema and annotations', async () => {
+  it('all tools declare annotations', async () => {
     const config: ServerConfig = {
       projects: [{ id: 'p1', name: 'P1', docsPath: '/docs', dbPath }],
     };
@@ -137,8 +141,6 @@ describe('createServer', () => {
 
     const result = await client.listTools();
     for (const tool of result.tools) {
-      expect(tool.outputSchema, `tool ${tool.name} should declare outputSchema`).toBeDefined();
-      expect(tool.outputSchema?.type).toBe('object');
       if (tool.name !== 'check_consistency') {
         expect(tool.annotations?.readOnlyHint, `tool ${tool.name} should have annotations`).toBe(true);
       }

@@ -15,7 +15,7 @@ export async function handleGeneratePageSpec(
     return {
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: '项目未配置 codeDir 或 routesFile，无法生成页面骨架。请在项目配置中添加 codeDir 和 routesFile 字段。',
         },
       ],
@@ -36,7 +36,7 @@ export async function handleGeneratePageSpec(
     return {
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: `未找到页面 "${pageId}" 对应的路由配置`,
         },
       ],
@@ -49,7 +49,7 @@ export async function handleGeneratePageSpec(
     return {
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: `无法解析组件路径: ${matchedRoute.component}`,
         },
       ],
@@ -72,7 +72,7 @@ export async function handleGeneratePageSpec(
   return {
     content: [
       {
-        type: 'text',
+        type: 'text' as const,
         text: md,
       },
     ],

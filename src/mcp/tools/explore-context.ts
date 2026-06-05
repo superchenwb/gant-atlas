@@ -59,7 +59,7 @@ export async function handleExploreContext(store: Store, args: unknown) {
     return {
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: `## 查询: "${query}"\n\n未找到匹配的业务节点。`,
         },
       ],
@@ -123,7 +123,7 @@ export async function handleExploreContext(store: Store, args: unknown) {
   return {
     content: [
       {
-        type: 'text',
+        type: 'text' as const,
         text: lines.join('\n'),
       },
     ],
