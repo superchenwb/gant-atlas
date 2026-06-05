@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-06-05
+
+### Added
+
+- **MCP Server 迁移**: 从 `@modelcontextprotocol/sdk` 的 `Server` 迁移到 `McpServer`，支持 Zod schema 自动序列化。
+- **CLI 全局配置**: `gant-atlas mcp serve` 的 `--config` 参数改为可选，默认自动加载 `~/.gant-atlas/projects.json`。
+- **版本信息集中管理**: 新增 `src/version.ts`，从 `package.json` 统一读取 name/version。
+
+### Changed
+
+- **数据存储路径统一**: 项目本地数据库默认从 `.gant/` 改为 `.gant-atlas/`，与项目名称保持一致。
+
+### Fixed
+
+- Zod 输入 schema 范围限制：`maxDepth`（1–5）和 `maxNodes`（1–100）添加 `.min().max()` 边界校验。
+- TypeScript 类型修复：工具返回的 `type: 'text'` 添加 `as const` 以确保类型精确匹配。
+
 ## [0.2.0] - 2026-06-05
 
 ### Added
