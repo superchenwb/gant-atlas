@@ -53,6 +53,23 @@
 - `button-area.md`：修改"新增"按钮的行为描述，增加条件判断说明
 - `grid-area.md`：新增一列描述
 
+### Spec 执行计划
+以下是在 Worktree 中将执行的步骤（AI 根据任务动态规划）：
+
+| 步骤 | 类型 | 操作 | 目标文件/工具 |
+|------|------|------|--------------|
+| 1 | 修改 | {具体修改描述} | `{file_path}` |
+| 2 | 文档 | {文档更新描述} | `{doc_path}` |
+| 3 | 质量 | code-detection-toolbox 检查 | `{modified_files}` |
+| 4 | 验证 | gant-create-test 浏览器验证 | {page_info} |
+| 5 | 文档 | gant-feature-docs 同步更新 | `{doc_dir}` |
+
+> 提交（git commit）在用户确认验证通过后自动执行（Step 7），不包含在 Spec 计划中。
+
+### Worktree 配置
+- **分支名**: `fix/{task-slug}-{timestamp}`
+- **目录**: `../{project-name}-wt-{task-slug}-{timestamp}/`
+
 ### 影响范围
 - 影响模块: {modules}
 - 影响功能: {features}（参考功能清单文档）

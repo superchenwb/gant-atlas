@@ -10,6 +10,7 @@ import { createTest } from '@gantTest';
  * 4. 替换 {namespace} 为页面路由命名空间（从本地路由 maps.ts 获取）
  * 5. 按照 runner API 编写测试步骤
  * 6. 每个操作必须有 desc 参数（Allure 步骤 + AI 兜底提示词）
+ * 7. 元素操作方法内置等待，无需手动 waitFor
  */
 const test = createTest('{pageName}-{area}-{scenario}', {
   // 标签 - 包含生成方式和业务模块
@@ -25,7 +26,7 @@ const test = createTest('{pageName}-{area}-{scenario}', {
 /**
  * 测试用例
  * @param page 当前测试页面
- * @param runner 测试运行器（所有元素操作必须通过 runner）
+ * @param runner 测试运行器（所有元素操作必须通过 runner，内置等待无需手动调用）
  * @param context 测试浏览器上下文
  * @param expect 测试期望值
  */
@@ -33,19 +34,16 @@ test.run(async ({ page, runner, context, expect }) => {
 
   // ==================== 查询前置 ====================
   // 非自动查询页面必须建立查询前置
-
-  // 定位查询表单
-  const searchForm = page.locator('form:visible, .ant-form:visible').first();
-  await runner.waitForElement(searchForm, 'visible', { desc: '查询表单区域' });
+  // createTest 已自动等待页面加载完成
 
   // 定位查询字段 - 使用 data-file-id
+  // const searchForm = page.locator('form:visible, .ant-form:visible').first();
   // const field = searchForm.locator('[data-file-id="fieldName"]').first();
   // await runner.fill(field.locator('input:visible').first(), 'candidateValue', '字段描述，输入候选值 candidateValue');
 
   // 点击查询
   // const queryButton = page.getByRole('button', { name: /^查\s*询|搜\s*索$/ }).first();
   // await runner.click(queryButton, '查询按钮');
-  // await runner.waitForNetworkIdle({ timeout: 15000 });
 
   // 判断查询结果
   // const grid = page.locator('.ant-table-wrapper:visible, .ag-root-wrapper:visible').first();
@@ -74,7 +72,6 @@ test.run(async ({ page, runner, context, expect }) => {
   // const addButton = page.getByRole('button', { name: '新增' }).first();
   // await runner.click(addButton, '新增按钮，打开新增表单弹窗');
   // const drawer = page.locator('.ant-drawer:visible').filter({ hasText: '新增' }).last();
-  // await runner.waitForElement(drawer, 'visible', { desc: '新增抽屉' });
 
   // 弹窗内操作...
 
@@ -83,10 +80,9 @@ test.run(async ({ page, runner, context, expect }) => {
   //   drawer.getByRole('button', { name: /^取\s*消|关\s*闭$/ }).first(),
   //   '取消并关闭抽屉'
   // );
-  // await runner.waitForElement(drawer, 'hidden', { desc: '抽屉关闭' });
 
   // 示例：AI 断言验证
-  // const result = await runner.aiAssert('页面显示保存成功提示');
+  // const result = await runner.aiAssert('页面是否显示保存成功提示');
   // if (!result?.pass) {
   //   console.info('未观察到保存成功提示');
   // }

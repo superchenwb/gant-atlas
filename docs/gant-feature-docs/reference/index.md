@@ -78,7 +78,7 @@
 
 ## 当前 skill 约束
 
-1. 文档路径固定映射到 `packages/<package>/docs/<src-relative-path>/`
+1. 文档路径固定映射到 `ai-harness-root/docs/<package>/<src-relative-path>/`
 2. 不依赖历史菜单映射文件
 3. 不输出自动化协议
 4. 更新文档时按受影响文件整篇重写

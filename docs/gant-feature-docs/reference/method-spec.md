@@ -10,24 +10,72 @@
 
 - `packages/*/src/hooks/**/*.ts(x)` — 业务 Hooks
 - `packages/*/src/utils/**/*.ts(x)` — 工具函数
+- `packages/procomponents/src/hooks/**/*.ts(x)` — 框架 Hooks
 
 不适用于：
 - 页面级临时 Hooks（仅被单一页面内部使用且无独立文件的 Hook）
-- procomponents 框架内部 Hooks
+- 组件专属 Hooks（位于组件 `hooks/` 子目录下，仅为该组件内部功能服务）
 
 ---
 
 ## 文档输出路径
 
+### 模块级共享 Hook
+
 ```text
 packages/<pkg>/src/hooks/<path>/useXxx.ts
--> packages/<pkg>/docs/hooks/<path>/useXxx.md
+-> docs/<pkg>/hooks/<path>/useXxx.md
 
+packages/procomponents/src/hooks/<path>/useXxx.ts
+-> docs/procomponents/hooks/<path>/useXxx.md
+```
+
+### 工具函数
+
+```text
 packages/<pkg>/src/utils/<path>/formatDate.ts
--> packages/<pkg>/docs/utils/<path>/formatDate.md
+-> docs/<pkg>/utils/<path>/formatDate.md
 ```
 
 单个文件对应单个 `.md` 文档。如果一个文件导出多个方法，在同一文档中分节描述每个方法。
+
+---
+
+## 文件命名规范
+
+Hook 文档文件名与代码文件名保持一致（PascalCase/camelCase），不转为 kebab-case：
+
+```text
+packages/<pkg>/src/hooks/bom/useBomSearch.ts
+-> packages/<pkg>/docs/hooks/bom/useBomSearch.md   ✅
+
+packages/<pkg>/src/hooks/usePageSearch.ts
+-> packages/<pkg>/docs/hooks/usePageSearch.md       ✅
+```
+
+禁止的命名：
+- ❌ `use-bom-search.md`（kebab-case）
+- ❌ `bom-search.md`（省略 use 前缀）
+
+---
+
+## 组件专属 Hook 与文档的关系
+
+组件内 `hooks/` 子目录下的 Hook（如 `useBatchOperations`、`useAutoResolveProcess`）是组件 UI 功能的具体实现。
+
+**核心规则**：
+
+- 组件专属 Hook **不独立建档**
+- 其功能已在组件文档的功能清单中描述（如 `button-area.md` 描述了按钮功能，`useBatchOperations` 是这些按钮的实现）
+- 文档描述的是**功能**（按钮做什么），不是**实现**（Hook 怎么做）
+- 只有模块级共享 Hook（被多个组件/页面共用，位于 `src/hooks/` 下）才需要独立文档
+
+**判定规则**：
+
+| Hook 位置 | 被谁使用 | 是否独立建档 |
+|-----------|----------|------------|
+| 组件 `hooks/` 子目录 | 仅本组件内部使用 | 否，功能在组件文档中描述 |
+| `src/hooks/` 目录 | 多个组件/页面共享 | 是，独立建档 |
 
 ---
 
@@ -54,7 +102,7 @@ packages/<pkg>/src/utils/<path>/formatDate.ts
 | 字段 | 要求 |
 |---|---|
 | 参数名 | 和代码保持一致 |
-| 类型 | 语义化描述（如"字符串"、"对象"、"布尔值"），避免直接写 TS 泛型语法 |
+| 类型 | 语义化描述，避免直接写 TS 泛型语法 |
 | 是否必填 | 是 / 否 |
 | 说明 | 描述参数的用途，不描述内部处理方式 |
 
@@ -79,14 +127,22 @@ packages/<pkg>/src/utils/<path>/formatDate.ts
 
 重点描述：
 - 方法主动做的事（发起请求、更新状态、触发回调等）
-- 返回的函数/方法的职责（如返回的 `onSearch` 函数的作用）
-- 依赖哪些参数变化会触发重新执行（非内部 dep 细节，而是从调用方角度可感知的）
+- 返回的函数/方法的职责
+- 依赖哪些参数变化会触发重新执行
 
 #### 2.5 使用场景与适用条件
 
 - 该方法适合在哪类页面或组件中使用
-- 有无前提条件（如需配合某组件使用、需要在特定上下文中调用等）
+- 有无前提条件
 - 与其他 Hooks / 方法配合使用时的依赖关系说明（功能层面，不写变量名）
+
+---
+
+## 跨组件引用规则
+
+方法文档中引用其他组件或方法时：
+- **只写被引用组件/方法的文档路径**
+- **不描述被引用组件的内部组成或方法的实现细节**
 
 ---
 
@@ -98,6 +154,7 @@ packages/<pkg>/src/utils/<path>/formatDate.ts
 4. **禁止写算法细节**：不描述内部数据转换逻辑的具体算法，只描述输入输出的语义
 5. **禁止摘要代替具体**：不能只写"管理搜索状态"，必须展开到具体行为
 6. **禁止伪造**：无法确认的内容写 `[待确认]`，不要猜测
+7. **禁止描述被引用组件/方法的内部**：引用时只写文档路径
 
 ---
 
@@ -110,6 +167,7 @@ packages/<pkg>/src/utils/<path>/formatDate.ts
 - [ ] 核心功能已按功能点分条描述，不只有总览
 - [ ] 使用场景和前提条件已说明
 - [ ] 文档中无内部 API 路径、Hook 实现细节、Store 变量名等
+- [ ] 引用的其他组件/方法只写了文档路径
 
 ---
 

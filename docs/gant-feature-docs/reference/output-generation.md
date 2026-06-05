@@ -75,14 +75,14 @@ packages/<package>/src/<page-path>
 文档目录：
 
 ```text
-packages/<package>/docs/<page-path>
+ai-harness-root/docs/<package>/<page-path>
 ```
 
 ### 2.2 示例
 
 ```text
 packages/ibom/src/masterdata/product/producttype
--> packages/ibom/docs/masterdata/product/producttype
+-> ai-harness-root/docs/ibom/masterdata/product/producttype
 ```
 
 ### 2.3 文件输入归一规则
@@ -102,19 +102,27 @@ packages/ibom/src/masterdata/product/producttype
 再映射到文档目录：
 
 ```text
-packages/ibom/docs/masterdata/product/producttype
+ai-harness-root/docs/ibom/masterdata/product/producttype
 ```
 
 ### 2.4 适用范围
 
-只对 `packages/*/src/**` 下的业务页面目录建立映射。
+对 `packages/*/src/**` 下的业务页面目录和组件目录建立映射。
 
-以下内容不建立独立页面文档映射：
+procomponents 框架组件也适用本文档规范：
 
-- 共享组件目录
-- 框架组件目录
-- 纯工具函数目录
-- 通用 hooks 目录
+```text
+packages/procomponents/src/business/<component-path>
+-> docs/procomponents/business/<component-path>
+
+packages/procomponents/src/hooks/<path>/useXxx.ts
+-> docs/procomponents/hooks/<path>/useXxx.md
+```
+
+以下内容不建立独立文档映射：
+
+- 纯工具函数目录（按 method-spec 规范处理）
+- 通用 hooks 目录（按 method-spec 规范处理）
 
 ## 四、生成文档模式
 
@@ -172,7 +180,7 @@ packages/ibom/docs/masterdata/product/producttype
 ### 6.1 主页面
 
 ```text
-packages/<package>/docs/<page-path>/
+ai-harness-root/docs/<package>/<page-path>/
 ├── main.md
 ├── search-area.md
 ├── button-area.md
@@ -194,7 +202,7 @@ packages/<package>/docs/<page-path>/
 ### 6.2 多 Tab / 多区域主页面
 
 ```text
-packages/<package>/docs/<page-path>/
+ai-harness-root/docs/<package>/<page-path>/
 ├── main.md
 ├── search-area.md
 ├── tab-{name-1}/
@@ -226,7 +234,7 @@ packages/<package>/docs/<page-path>/
 ### 6.3 详情页
 
 ```text
-packages/<package>/docs/<page-path>/
+ai-harness-root/docs/<package>/<page-path>/
 ├── main.md
 ├── header-buttons.md
 ├── button-{name}.md
@@ -242,7 +250,61 @@ packages/<package>/docs/<page-path>/
 - 子页签内如果同时有按钮区和表格区，也要按主页面同样的分离规则处理。
 - 详情页 `main.md` 中必须列出全页面功能索引，包含头部按钮、基本信息、子页签功能和复杂按钮文档链接。
 
-## 八、路由信息来源
+## 八、跨组件引用规则
+
+任何文档类型（页面、组件、方法）引用另一个组件时：
+
+- **只在功能清单中写被引用组件的文档路径**
+- **不描述被引用组件的内部组成、Props、交互行为等**
+- 示例：在按钮清单中引用 ApprovalProcessGrid 组件 → 只写 `→ [审批流程表格文档](../../workflowapproval/approvalprocessgrid/main.md)`
+
+此规则同样适用于：
+- 页面文档中引用业务组件
+- 组件文档中引用其他组件
+- 方法文档中引用相关组件或方法
+
+## 九、复合组件文档结构
+
+### 9.1 复合组件
+
+```text
+ai-harness-root/docs/<package>/<component-path>/
+├── main.md                    # 组件概述 + Props + 功能索引 + 文档导航
+├── search-area.md             # 搜索表单字段（如组件含 SearchForm）
+├── grid-area.md               # Grid 列清单 + 行操作 + 单元格点击
+├── button-area.md             # 按钮清单 + 行为说明
+├── form-area.md               # 编辑/展示表单字段（如组件含 SchemaForm）
+├── button-{name}.md           # 复杂按钮 + 弹窗一体化文档
+├── popup-{name}.md            # 复用型独立弹窗
+└── {area-name}-area.md        # 其他独立功能区域（按需扩展）
+```
+
+强制拆分要求：
+
+- 复合组件的 `main.md` 必须包含功能索引与文档导航
+- 只要组件内同时存在按钮区和表格/主内容区，就必须分开描述
+- 复杂按钮 + 弹窗优先合并到 `button-{name}.md`
+- 只有复用型弹窗才单独生成 `popup-{name}.md`
+- 组件专属 Hook（位于组件 `hooks/` 子目录下）不独立建档，其功能在按钮清单中描述
+- 模块级共享 Hook（位于 `src/hooks/` 下）独立建档
+- 子文档类型按组件实际包含的功能区域确定，不限于上表列举：
+  - 含表格 → `grid-area.md`
+  - 含按钮 → `button-area.md`（复杂按钮拆为 `button-{name}.md`）
+  - 含搜索表单 → `search-area.md`
+  - 含编辑/展示表单 → `form-area.md`
+  - 其他独立功能区域 → `{area-name}-area.md`（如 `tree-area.md`、`statistics-area.md` 等）
+- 拆分判断标准：该区域有独立的字段/交互/逻辑需要逐项描述，且内容量足以独立成文
+
+### 9.2 简单组件
+
+```text
+ai-harness-root/docs/<package>/<component-path>/
+└── main.md
+```
+
+无拆分要求，所有内容在 `main.md` 中完整描述。
+
+## 十、路由信息来源
 
 路由获取顺序：
 
@@ -251,18 +313,18 @@ packages/<package>/docs/<page-path>/
 3. 详情页注册或页面容器中的路由线索
 4. 无法确认时写 `[待确认]`
 
-## 九、质量检查
+## 十一、质量检查
 
 输出或更新后检查：
 
-- [ ] 文档目录路径与页面代码目录一一对应
+- [ ] 文档目录路径与代码目录一一对应
 - [ ] 页面文件输入已正确归一到页面目录
 - [ ] 文档中没有源码路径、Hook 名称、导入路径
 - [ ] 文档中没有历史协议文案
-- [ ] 只写页面事实
-- [ ] 页面上每一个可见功能都有逐项描述，不是只有区域总览
+- [ ] 只写功能事实
+- [ ] 页面/组件上每一个可见功能都有逐项描述，不是只有区域总览
 - [ ] 每个按钮、行操作、单元格点击、弹窗入口、独立模块都单独落文档
-- [ ] `main.md` 中已列出全页面功能索引
+- [ ] `main.md` 中已列出全功能索引
 - [ ] 多 Tab、多 Grid、大弹窗已正确拆文档
 - [ ] 只要同时存在按钮区和表格 / 主内容区，就已分开描述
 - [ ] 每个 Tab 目录下按钮区和表格区已拆开，按钮功能没有混写进 Grid 描述
@@ -271,3 +333,12 @@ packages/<package>/docs/<page-path>/
 - [ ] 轻量弹窗已在按钮文档中完整展开字段与规则
 - [ ] 只有复用型或必须独立表达的弹窗才单独成文档
 - [ ] 按钮、表格、其他模块中的关键状态差异已落成矩阵或等价清单
+- [ ] 复合组件 `main.md` 已包含功能索引与文档导航
+- [ ] 复合组件的 Grid 区域已拆分为 `grid-area.md`，每列单独一行
+- [ ] 复合组件的按钮区域已拆分为 `button-area.md`，每按钮单独一行
+- [ ] 复合组件的搜索区域已拆分为 `search-area.md`（如含搜索表单）
+- [ ] 复合组件的表单区域已拆分为 `form-area.md`（如含编辑/展示表单）
+- [ ] 复合组件的其他独立功能区域已拆分为对应的 `{area-name}-area.md`
+- [ ] Hook 文档文件名与代码文件名一致（非 kebab-case）
+- [ ] 组件专属 Hook 未独立建档
+- [ ] 引用其他组件时只写了文档路径，未描述被引用组件的内部组成

@@ -2,6 +2,10 @@
 
 ## 修改验证结果
 
+### Worktree 信息
+- 分支名: {branch_name}
+- 目录: {worktree_dir}
+
 ### 代码修改
 | 文件 | 状态 |
 |-----|------|
@@ -23,5 +27,12 @@
 | `docs/xxx/button-area.md` | ✅ 已更新 | {更新内容摘要} |
 | 跳过 | - | 纯样式修改，不影响功能描述 |
 
+### 计划提交预览
+| 序号 | 提交信息 | 文件 |
+|------|---------|------|
+| 1 | `fix(ecr): 修复xxx问题 #{工作项ID}` | `packages/ibom/src/ebom/ecr/detail.tsx`, `hooks.ts` |
+| 2 | `fix(eco): 修复ECO列表页问题 #{工作项ID}` | `packages/ibom/src/ebom/eco/list.tsx` |
+| 3 | `docs: 更新{模块}功能清单文档` | `docs/ibom/...` |
+
 ---
-请确认验证结果是否通过？确认后将自动提交代码。
+> Step 6 不执行 git commit。确认通过后，Step 7 按上述分组自动执行提交、合并和清理。

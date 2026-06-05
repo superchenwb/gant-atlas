@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "prompt": "ibom零件详情页的设计信息Tab加载报错",
+    "expected": "Step 2 严格按 2a(Glob/Grep搜索)→2b(文档扫描门控)→2c(Read代码阅读) 执行，2b 扫描 ibom 零件详情页相关目录的功能清单文档状态，输出文档状态表，2b完成后才用 Read 阅读代码",
+    "focus": "验证 2a→2b→2c 严格顺序和工具约束"
+  },
+  {
+    "id": 2,
+    "prompt": "审批流程逻辑优化：从我发起的流程进入的变更单，显示转发/调整审批人/跳过任务按钮，将原本的表格操作改成按钮放在按钮栏左侧",
+    "expected": "2a 搜索定位涉及多个目录(approvalprocessgrid/approvalprocessactions/mystartprocess)，2b 对每个目录分别扫描文档状态并输出文档状态表，2c 结合文档和代码分析影响范围",
+    "focus": "验证 2b 对多目录文档扫描的完整性，不能因为找到某个目录的文档就跳过其他目录"
+  },
+  {
+    "id": 3,
+    "prompt": "procomponents 的 Grid 组件搜索条件重置有问题，点击重置按钮后搜索表单的值没有清空",
+    "expected": "2a 定位到 procomponents/src 下的 Grid 相关目录，2b 扫描文档时识别出 procomponents 框架代码不在业务文档覆盖范围，提示用户确认是否继续，2c 再阅读代码",
+    "focus": "验证边界条件：涉及 procomponents 框架代码时的处理"
+  }
+]

@@ -1,45 +1,50 @@
 ---
 name: gant-create-test
-description: 对指定目标进行交互式测试并可选生成 E2E 测试脚本。利用长期登录态和菜单导航到达目标页面，在浏览器中实际操作验证功能；测试过程中可将验证通过的操作同步转化为可执行的 TypeScript 测试脚本。触发词：生成测试脚本、创建测试、gant-create-test、测试脚本、E2E测试、功能测试脚本、交互式测试、测试功能。
+description: 对指定目标进行交互式测试，产出测试报告、E2E 测试脚本和脚本文档。利用长期登录态和菜单导航到达目标页面，在浏览器中实际操作验证功能；测试过程同步生成结构化报告；可将验证通过的操作转化为可执行 TypeScript 脚本并生成对应文档。触发词：生成测试脚本、创建测试、gant-create-test、测试脚本、E2E测试、功能测试脚本、交互式测试、测试功能、测试报告。
 ---
 
 # Gant Create Test
 
-**两大正交能力**：
-1. **测试** — 给定目标，利用登录态+菜单导航在浏览器中实际操作验证，不涉及分析/拆分/写文件
-2. **生成测试脚本** — 在测试过程中将验证通过的操作同步转化为可执行 TypeScript 脚本
+**三大产物**：
+1. **测试报告** — 每次测试必产出，测试过程中实时记录，测试结束后输出
+2. **测试脚本** — 根据功能复杂度生成 1 个或多个 `.ts` 文件
+3. **脚本文档** — 每个脚本文件对应一个 `.md` 说明文档
 
-测试是基础能力，生成脚本是测试之上叠加的产出。两者可独立使用。
+产物 1 始终产出；产物 2 和 3 在脚本模式下产出（三者同时产出）。
 
 ## 使用模式
 
-### 模式一：只测试
+### 模式一：测试 + 报告
 
-用户只想验证功能，不生成脚本。如"测试 ECR 查询功能"。
+用户验证功能，产出测试报告。如"测试 ECR 查询功能"。
 
 | Step | 操作 | 输出 |
 |------|------|------|
 | T1 | 确定目标 | 目标页面 path 标识 + 功能清单（如有） |
 | T2 | 加载登录态 | storage-state 恢复登录，验证登录有效性 |
 | T3 | 菜单导航 | 导航到目标页面（API + 本地路由匹配） |
-| T4 | 交互验证 ⏸️ | 逐项执行操作并验证结果 |
-| T5 | 反馈结果 | 通过/失败的操作清单 + 截图 |
+| T4 | 交互验证 ⏸️ | 逐项执行操作并验证结果，**实时记录到报告** |
+| T5 | 输出报告 | `ai-harness-root/test/reports/{page-slug}-{timestamp}.md` |
+
+**T4 实时记录**：每步操作后立即将结果（通过/失败/跳过 + 截图路径）追加到报告数据结构，测试结束即可输出完整报告。
 
 **T4 重试规则**：单步操作失败后修正定位/操作重试，最多 **3次**。3次仍失败则标记该步为"失败"并继续下一步，不阻塞整体流程。
 
 **T4 检查点**：涉及写操作（新增/编辑/删除）前，告知用户将执行的操作和预期影响，确认后执行。
 
-### 模式二：一边测试一边生成脚本
+### 模式二：测试 + 报告 + 脚本 + 文档（完整产出）
 
-用户需要生成测试脚本。测试过程中同步产出脚本代码。
+用户需要生成测试脚本。测试过程同步产出全部 3 个产物。
 
 | Step | 操作 | 输出 |
 |------|------|------|
 | G1 | 确定目标 | 同模式一 T1 |
 | G2 | 加载登录态 + 菜单导航 | 同模式一 T2-T3 |
 | G3 | 分析范围 ⏸️ | 脚本拆分方案（文件列表） |
-| G4 | 交互验证循环 | 验证通过的操作 → runner 代码 |
-| G5 | 输出完整脚本文件 | `test-reports/e2e-scripts/` 下的 `.ts` 文件 |
+| G4 | 交互验证循环 | 验证通过的操作 → runner 代码，**实时记录报告** |
+| G5 | 输出脚本文件 | `ai-harness-root/test/e2e-scripts/{page-slug}/` 下的 `.ts` 文件 |
+| G6 | 输出脚本文档 | 每个 `.ts` 对应的 `.md` 说明文档 |
+| G7 | 输出测试报告 | `ai-harness-root/test/reports/{page-slug}-{timestamp}.md` |
 
 **G3 脚本拆分标准**：
 
@@ -157,17 +162,57 @@ startMenus 找到 ecr → parentResourceId 指向 "变更管理" → parentResou
 
 ---
 
-## 核心二：生成测试脚本
+## 产物一：测试报告
 
-### 脚本结构
+> 两种模式都产出，是测试的必产出物。
+
+### 产出时机
+
+测试过程中**实时记录**每步结果，测试结束后一次性输出报告文件。
+
+### 报告路径
 
 ```
-test-reports/e2e-scripts/
-├── {page-slug}/
-│   ├── {page-slug}-search-query.ts
-│   ├── {page-slug}-grid-actions.ts
-│   └── {page-slug}-modal-edit.ts
-└── {page-slug}.spec.ts          # 入口（仅 import）
+ai-harness-root/test/reports/{page-slug}-{YYYYMMDD-HHmmss}.md
+```
+
+### 报告结构
+
+参考 [templates/report-template.md](templates/report-template.md)，核心包含：
+
+| 章节 | 内容 |
+|------|------|
+| 概要 | 页面名称、测试时间、总用例数、通过/失败/跳过数、通过率 |
+| 环境信息 | 环境地址、浏览器版本、登录用户 |
+| 测试明细 | 每个步骤的：序号、描述、操作、预期结果、实际结果、状态(✅/❌/⏭️)、截图、耗时 |
+| Blocker 清单 | 测试中发现的所有阻塞项（数据缺失、功能不可用等） |
+| 失败分析 | 失败步骤的根因分析和修复建议 |
+
+### 实时记录规则
+
+测试执行时，在内存中维护一个报告数据结构，每步操作后立即追加：
+
+```
+步骤执行 → 记录 { 序号, 描述, 状态, 截图路径, 耗时, 备注 }
+  ↓
+全部完成 → 汇总统计 → 输出 .md 报告文件
+```
+
+---
+
+## 产物二：测试脚本
+
+> 仅模式二产出。
+
+### 脚本目录结构
+
+```
+ai-harness-root/test/e2e-scripts/
+└── {page-slug}/
+    ├── {page-slug}.spec.ts          # 入口（仅 import）
+    ├── {page-slug}-search-query.ts  # 查询相关脚本
+    ├── {page-slug}-grid-actions.ts  # 表格操作脚本
+    └── {page-slug}-modal-edit.ts    # 弹窗操作脚本
 ```
 
 ### 脚本模板
@@ -199,13 +244,49 @@ test.run(async ({ page, runner, context, expect }) => {
 
 ---
 
+## 产物三：脚本文档
+
+> 仅模式二产出，每个脚本文件对应一个 `.md` 文档。
+
+### 文档路径
+
+```
+ai-harness-root/test/e2e-scripts/{page-slug}/
+├── {page-slug}-search-query.ts   # 脚本
+├── {page-slug}-search-query.md   # 对应文档
+├── {page-slug}-grid-actions.ts
+└── {page-slug}-grid-actions.md
+```
+
+### 文档结构
+
+参考 [templates/script-doc-template.md](templates/script-doc-template.md)，核心包含：
+
+| 章节 | 内容 |
+|------|------|
+| 概述 | 脚本名称、文件路径、覆盖功能区域、严重程度 |
+| 前置条件 | 登录态要求、数据依赖、页面状态要求 |
+| 测试步骤 | 逐步描述：步骤序号、操作描述、预期结果、涉及字段/组件 |
+| 稳定数据 | 使用的 candidates.json 数据清单 |
+| 注意事项 | 特殊处理逻辑、已知限制、环境差异说明 |
+
+### 文档生成时机
+
+在 G5 脚本文件写入后，**立即**为每个脚本生成对应 `.md` 文档（G6），不延后。
+
+---
+
 ## 辅助参考
 
 > 测试和生成脚本时必须遵守的规范，详细内容见参考文件。
 
 ### Runner 使用规范
 
-所有操作通过 `runner` 执行，`desc` 同时作为 Allure 步骤描述和 AI 兜底提示词。禁止用 `runner.navigateTo`、`runner.clickAndWait`、`runner.fillAndWait`、`page.goto`。
+所有操作通过 `runner` 执行，`desc` 同时作为 Allure 步骤描述和 AI 兜底提示词。元素操作方法内置等待，无需手动调用等待方法。
+
+**`aiWaitFor` 谨慎使用**：耗时操作（最多 15s），仅用于非网络驱动的异步场景（如轮询结果），大多数场景无需使用。
+
+**禁止使用**：`navigateTo`、`clickAndWait`、`fillAndWait`、`page.goto`
 
 - **详细 API**：[references/runner-api.md](references/runner-api.md)
 
@@ -213,7 +294,7 @@ test.run(async ({ page, runner, context, expect }) => {
 
 - **data-file-id 优先**：`searchForm.locator('[data-file-id="fieldName"]')`，不用文本标签
 - **desc 写法**：必须写成可执行的人类动作描述（如 `'销售产品下拉选择器，从推荐文本 S50、四方桌 中选择'`，不能是 `'点击'`）
-- **Playwright 边界**：允许定位查询（`page.locator`、`expect().toBeVisible`），禁止操作（`locator.click()` → 用 `runner.click()`）
+- **Playwright 边界**：允许定位查询（`page.locator`、`expect().toBeVisible`）和等待方法（`page.waitForSelector`、`page.waitForLoadState`、`page.waitForResponse`、`locator.waitFor`），禁止操作（`locator.click()` → 用 `runner.click()`）
 
 - **组件定位速查**：[references/component-locators.md](references/component-locators.md)
 
@@ -225,12 +306,12 @@ test.run(async ({ page, runner, context, expect }) => {
 ## 错误处理
 
 | 场景 | 处理方式 |
-|-----|---------|
-| 登录态过期/无效 | 重新加载 storage-state；仍失败则提示用户检查 auth.json 配置 |
-| 菜单导航失败（目标不在菜单树中） | 用本地路由 maps.ts 兜底：直接通过 URL 路径导航 |
-| API 请求失败（/security/findUserAggregateInfo） | 检查本地服务是否启动（参照 gant-issue-fixer 的 packages.json 中 startCommand）；未启动则先启动 |
-| 选择器数据无效（candidates.json 中数据过期） | 顺序尝试下一个候选值；全部失败则用 `console.info` 标记跳过，不阻塞流程 |
-| 单步操作3次重试仍失败 | 标记为"失败"，继续下一步；最终在结果中汇总所有失败项 |
-| 浏览器页面加载超时 | 等待最长10秒；超时后刷新页面重试1次；仍失败则标记失败 |
-| 目标页面无数据 | 执行查询前置（从 candidates.json 取值），如仍无数据则用 `console.info` 只覆盖空态场景 |
-| 脚本文件写入失败 | 检查目录权限，重试1次；仍失败则输出脚本内容到终端让用户手动保存 |
+|-----|--------|
+| 登录态过期/无效 | 重新加载 storage-state；仍失败则标记为 Blocker 写入报告，提示用户检查 auth.json |
+| 菜单导航失败 | 用本地路由 maps.ts 兜底：直接通过 URL 路径导航；兜底失败标记 Blocker |
+| API 请求失败 | 检查本地服务是否启动；未启动则先启动；仍失败标记 Blocker |
+| 选择器数据无效 | 顺序尝试下一个候选值；全部失败则标记 ⏭️ 跳过 + Blocker，不阻塞 |
+| 单步操作3次重试仍失败 | 标记 ❌ 失败，继续下一步；在报告中汇总所有失败项 |
+| 页面加载超时 | 等待最长10秒；超时刷新重试1次；仍失败标记 ❌ |
+| 目标页面无数据 | 执行查询前置，仍无数据标记 ⏭️ 空态 + Blocker |
+| 文件写入失败 | 检查目录权限重试1次；仍失败将内容输出到终端 |

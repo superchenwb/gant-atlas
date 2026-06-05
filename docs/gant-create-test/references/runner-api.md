@@ -6,9 +6,9 @@
 import { createTest } from '@gantTest';
 
 const test = createTest(name: string, meta: {
-  tags: string[];           // 标签数组，如 ['自动生成', '工程变更']
+  tags: string[];           // 标签数组，如 ['交互生成', '工程变更']
   severity: string;         // blocker|critical|major|minor|trivial|normal
-  namespace: string;        // 页面路由命名空间（自动推导路由）
+  namespace: string;        // 页面路由命名空间（从本地路由 maps.ts 获取）
   pageName: string;         // 页面中文名称
 });
 ```
@@ -17,7 +17,7 @@ const test = createTest(name: string, meta: {
 1. 创建 runner fixture
 2. 设置 Allure 元数据
 3. 按 namespace/pageName 自动解析路由并导航
-4. 默认执行 `runner.aiWaitFor('等待页面加载完成')`
+4. 自动等待页面加载完成（内置 waitFor，无需手动调用）
 
 ## test.run 回调参数
 
@@ -34,148 +34,87 @@ test.run(async ({ page, runner, context, expect }) => {
 
 ### 元素操作方法
 
+所有元素操作均采用 **Playwright 定位器优先 → AI 识别降级** 的两层策略，每个操作自动记录 Allure 步骤。
+
 #### runner.click(locator, desc)
-点击元素。`desc` 进入 Allure 报告 + AI 兜底提示词。
+点击元素。
 
 ```typescript
-await runner.click(
-  page.getByRole('button', { name: '新增' }),
-  '新增按钮，打开新增表单弹窗'
-);
+await runner.click(page.getByRole('button', { name: '新增' }), '页面右上角的新增按钮');
+await runner.click(page.getByText('基础规范库'), '顶部导航栏的基础规范库');
+await runner.click(page.locator('.ant-drawer-mask'), '右侧抽屉的遮罩层');
 ```
 
 #### runner.fill(locator, value, desc)
 填写输入框/文本域。会先清空已有内容。
 
 ```typescript
-await runner.fill(
-  nameField.locator('input:visible').first(),
-  'AUTO-TEST-001',
-  '名称输入框，输入自动测试名称 AUTO-TEST-001'
-);
+await runner.fill(page.getByLabel('属性名称:'), '11111', '属性名称输入框');
 ```
 
 #### runner.hover(locator, desc)
 悬停元素。用于触发 Tooltip、下拉菜单等。
 
 ```typescript
-await runner.hover(
-  row.locator('.action-column'),
-  '操作列，悬停显示更多操作按钮'
-);
+await runner.hover(page.getByRole('menuitem', { name: '更多操作' }), '更多操作菜单');
 ```
 
 #### runner.press(locator, key, desc)
-在元素上按键。key 为 Playwright Keyboard key 名。
+在元素上按键。key 为 Playwright Keyboard key 名，如 `Enter`、`Tab`、`Escape`。
 
 ```typescript
-await runner.press(
-  searchInput,
-  'Enter',
-  '搜索输入框，按回车触发搜索'
-);
+await runner.press(page.getByLabel('搜索'), 'Enter', '搜索输入框按回车');
 ```
 
 #### runner.selectOption(locator, value, desc)
-选择原生 select 的选项。**Antd Select 不用此方法**（见组件定位策略）。
+选择下拉选项。
 
 ```typescript
-await runner.selectOption(
-  nativeSelect,
-  'option1',
-  '原生下拉框选择选项1'
-);
+await runner.selectOption(page.getByLabel('类型:'), 'normal', '类型下拉框');
 ```
 
 #### runner.check(locator, desc) / runner.uncheck(locator, desc)
 勾选/取消勾选复选框。
 
 ```typescript
-await runner.check(
-  field.locator('.ant-checkbox-wrapper:visible').first(),
-  '启用选项，勾选启用'
-);
+await runner.check(page.getByLabel('启用'), '启用复选框');
+await runner.uncheck(page.getByLabel('只读'), '只读复选框');
 ```
 
 #### runner.dblclick(locator, desc)
-双击元素。用于行双击打开详情等场景。
-
-```typescript
-await runner.dblclick(
-  firstRow,
-  '表格第一行，双击打开详情页'
-);
-```
+双击元素。
 
 #### runner.focus(locator, desc)
-聚焦元素。用于触发失焦校验等。
+聚焦元素。
+
+### AI 专属方法
+
+#### runner.aiAssert(assertionDesc)
+AI 语义断言，对当前页面进行语义判断。
 
 ```typescript
-await runner.focus(
-  nameInput,
-  '名称输入框，聚焦触发校验'
-);
+const result = await runner.aiAssert('页面是否显示保存成功提示');
+// result: { pass: boolean; thought: string | undefined; message: string | undefined } | undefined
+if (result?.pass) { /* 断言通过 */ }
 ```
 
-### 等待方法
-
-#### runner.waitForElement(locator, state, opts)
-等待元素达到指定状态。
+#### runner.aiWaitFor(conditionDesc)
+AI 条件等待，超时 15 秒，检查间隔 3 秒。不抛异常，返回 `true/false`。
 
 ```typescript
-// 等待可见
-await runner.waitForElement(drawer, 'visible', { desc: '新增抽屉' });
-
-// 等待隐藏
-await runner.waitForElement(drawer, 'hidden', { desc: '新增抽屉关闭' });
+const ready = await runner.aiWaitFor('等待页面加载完成');
+const visible = await runner.aiWaitFor('弹窗是否已出现');
 ```
 
-#### runner.waitForNetworkIdle(opts)
-等待网络空闲，默认超时 15s。
+> **谨慎使用**：`aiWaitFor` 是耗时操作（最多 15 秒），仅用于非网络驱动的异步场景，如：等待轮询结果、等待非接口驱动的 UI 变化。大多数场景下元素操作方法已内置等待，无需手动等待。
+
+#### runner.aiAction(actionDesc)
+执行任意 AI 描述操作，用于无法通过 Playwright 定位器描述的复杂交互。
 
 ```typescript
-await runner.waitForNetworkIdle({ timeout: 15000 });
+await runner.aiAction('点击页面右上角关闭弹窗的 X 按钮');
+await runner.aiAction('滚动到页面底部');
 ```
-
-#### runner.waitForResponse(urlPattern, opts)
-等待特定 API 响应。
-
-```typescript
-await runner.waitForResponse('**/api/ecr/list**', { timeout: 15000 });
-```
-
-### AI 智能方法
-
-#### runner.aiWaitFor(desc)
-AI 等待条件满足。用于页面加载、异步操作等不确定时机的场景。
-
-```typescript
-await runner.aiWaitFor('等待页面加载完成');
-await runner.aiWaitFor('等待表格数据渲染完成');
-```
-
-#### runner.aiAction(desc)
-AI 执行复杂操作。用于滚动、复杂交互等无法精确定位的场景。
-
-```typescript
-await runner.aiAction('滚动到表格底部');
-await runner.aiAction('在弹窗中找到并点击审批通过的按钮');
-```
-
-#### runner.aiAssert(desc)
-AI 断言可观察结果。返回 `{ pass: boolean }`。
-
-```typescript
-const result = await runner.aiAssert('页面显示保存成功提示');
-if (!result?.pass) {
-  console.info('未观察到保存成功提示，继续检查');
-}
-```
-
-**aiAssert 约束**：
-- 只断言截图中可直接观察的内容
-- 不可观察信息（推理、业务逻辑）用 `console.info()` 记录
-- 返回值可判断，但不承载推理说明
 
 ## 禁止使用的方法
 
@@ -185,7 +124,6 @@ if (!result?.pass) {
 | `runner.clickAndWait()` | 隐藏等待时机，易误等 network idle |
 | `runner.fillAndWait()` | 同上 |
 | `page.goto()` | 同 navigateTo |
-| `page.keyboard.press()` | 用 runner.press 替代 |
 
 ## Playwright 原生 API 使用边界
 
@@ -214,6 +152,12 @@ locator.textContent()
 locator.getAttribute('class')
 locator.getAttribute('data-file-id')
 
+// 等待方法（Playwright 原生等待允许使用）
+page.waitForSelector('.ant-modal')
+page.waitForLoadState('networkidle')
+page.waitForResponse('**/api/endpoint')
+locator.waitFor()
+
 // 文件上传（runner 无此封装）
 input.setInputFiles('/path/to/file')
 ```
@@ -221,14 +165,14 @@ input.setInputFiles('/path/to/file')
 ### 禁止使用（必须用 runner）
 
 ```typescript
-locator.click()       → runner.click()
-locator.fill()        → runner.fill()
-locator.check()       → runner.check()
-locator.uncheck()     → runner.uncheck()
-locator.hover()       → runner.hover()
-locator.press()       → runner.press()
-locator.dblclick()    → runner.dblclick()
-locator.focus()       → runner.focus()
+locator.click()        → runner.click()
+locator.fill()         → runner.fill()
+locator.check()        → runner.check()
+locator.uncheck()      → runner.uncheck()
+locator.hover()        → runner.hover()
+locator.press()        → runner.press()
+locator.dblclick()     → runner.dblclick()
+locator.focus()        → runner.focus()
 locator.selectOption() → runner.selectOption()
 ```
 
