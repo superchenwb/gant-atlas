@@ -1,8 +1,13 @@
 import type { Store } from '../../store/sqlite.js';
 import { z } from 'zod';
 import { formatToolResult, validateToolArgs } from './error.js';
+import { validateStandardPage } from '../../validation/page.js';
+import { join } from 'path';
 
-const CheckConsistencySchema = z.object({ pageId: z.string().optional() });
+const CheckConsistencySchema = z.object({
+  pageId: z.string().optional(),
+  docsPath: z.string().optional(),
+});
 
 export interface ConsistencyIssue {
   type: string;
@@ -157,6 +162,7 @@ export function runConsistencyChecks(store: Store, pageId?: string): Consistency
 export async function handleCheckConsistency(store: Store, args: unknown) {
   const validation = validateToolArgs(CheckConsistencySchema, args);
   const pageId = validation.ok ? validation.data.pageId : undefined;
+  const docsPath = validation.ok ? validation.data.docsPath : undefined;
 
   // Reset stale flags for all pages before checking
   for (const p of store.listNodesByType('page')) {
@@ -165,9 +171,20 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
 
   const report = runConsistencyChecks(store, pageId);
 
+  // 当提供 docsPath 时，额外运行标准页面结构检查
+  if (docsPath) {
+    const structureIssues = checkPageStructure(store, docsPath, pageId);
+    report.issues.push(...structureIssues);
+    report.totalIssues = report.issues.length;
+    report.summary =
+      report.issues.length === 0
+        ? '所有检查通过，未发现一致性问题'
+        : `发现 ${report.issues.length} 个一致性问题，请逐一排查`;
+  }
+
   // Mark incomplete pages as stale
   for (const issue of report.issues) {
-    if (issue.type === 'incomplete_page') {
+    if (issue.type === 'incomplete_page' || issue.type === 'non_standard_page') {
       const match = issue.description.match(/页面 "([^"]+)"/);
       if (match) {
         store.markNodeStale(`page:${match[1]}`, true);
@@ -176,4 +193,40 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
   }
 
   return formatToolResult(report, { count: report.issues.length });
+}
+
+/**
+ * 检查页面目录结构是否符合标准页面定义
+ */
+function checkPageStructure(
+  store: Store,
+  docsPath: string,
+  filterPageId?: string
+): ConsistencyIssue[] {
+  const issues: ConsistencyIssue[] = [];
+  const pages = store.listNodesByType('page');
+
+  for (const page of pages) {
+    const rawId = page.id.replace(/^page:/, '');
+    if (filterPageId && rawId !== filterPageId) continue;
+
+    const moduleName = page.module || '';
+    const pagePath = join(docsPath, moduleName, page.name);
+
+    try {
+      const report = validateStandardPage(pagePath);
+      if (report.skippedByCustom) continue;
+      if (!report.isStandard) {
+        issues.push({
+          type: 'non_standard_page',
+          description: `页面 "${rawId}" (${page.title}) 不符合标准页面结构`,
+          suggestion: `检查文件: ${report.files.map((f) => `${f.fileName}(${f.exists ? (f.headersValid ? '✓' : '格式错误') : '缺失'})`).join(', ')}`,
+        });
+      }
+    } catch {
+      // 目录不存在或其他 IO 错误，跳过（页面可能未生成功能清单）
+    }
+  }
+
+  return issues;
 }

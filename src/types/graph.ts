@@ -194,6 +194,50 @@ export interface GraphEdge {
 }
 
 // ─────────────────────────────────────────
+// 完整 GraphNode / GraphEdge Zod Schema
+// ─────────────────────────────────────────
+
+/** GraphNode 的完整 Zod Schema —— 用于运行时验证和类型安全 */
+export const GraphNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.enum(['page', 'field', 'column', 'button', 'api', 'component', 'method', 'modal', 'tab']),
+  name: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  tags: z.array(z.string()),
+  meta: z.record(z.unknown()).optional(),
+  module: z.string().optional(),
+  docsPath: z.string().optional(),
+  contentHash: z.string().optional(),
+});
+
+/** GraphEdge 的完整 Zod Schema */
+export const GraphEdgeSchema = z.object({
+  source: z.string().min(1),
+  target: z.string().min(1),
+  type: z.enum(['contains', 'calls', 'opens', 'depends_on', 'belongs_to']),
+  description: z.string().optional(),
+});
+
+/** 安全解析 GraphNode —— 替代 as 断言 */
+export function safeParseGraphNode(data: unknown): { success: true; data: GraphNode } | { success: false; issues: z.ZodIssue[] } {
+  const result = GraphNodeSchema.safeParse(data);
+  if (result.success) {
+    return { success: true, data: result.data as GraphNode };
+  }
+  return { success: false, issues: result.error.issues };
+}
+
+/** 安全解析 GraphEdge —— 替代 as 断言 */
+export function safeParseGraphEdge(data: unknown): { success: true; data: GraphEdge } | { success: false; issues: z.ZodIssue[] } {
+  const result = GraphEdgeSchema.safeParse(data);
+  if (result.success) {
+    return { success: true, data: result.data as GraphEdge };
+  }
+  return { success: false, issues: result.error.issues };
+}
+
+// ─────────────────────────────────────────
 // 项目级容器
 // ─────────────────────────────────────────
 

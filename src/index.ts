@@ -89,12 +89,24 @@ program
   .requiredOption('--db <path>', 'SQLite 数据库文件路径')
   .option('--codeDir <path>', '代码根目录路径（可选，启用 Semantic Mapper）')
   .option('--routesFile <path>', '路由配置文件路径（可选）')
-  .action(async (options: { db: string; codeDir?: string; routesFile?: string }) => {
-    const result = await runValidate(options.db, options.codeDir, options.routesFile);
+  .option('--docsPath <path>', '功能清单根目录路径（可选，启用标准页面结构检查）')
+  .action(async (options: { db: string; codeDir?: string; routesFile?: string; docsPath?: string }) => {
+    const result = await runValidate(options.db, options.codeDir, options.routesFile, options.docsPath);
 
-    const output = result.mapping
-      ? { consistency: result.consistency, mapping: result.mapping }
-      : result.consistency;
+    // 保持向后兼容：没有额外选项时直接输出 consistency 报告
+    let output: unknown;
+    if (result.mapping || result.structure) {
+      const wrapped: Record<string, unknown> = { consistency: result.consistency };
+      if (result.structure) {
+        wrapped.structure = result.structure;
+      }
+      if (result.mapping) {
+        wrapped.mapping = result.mapping;
+      }
+      output = wrapped;
+    } else {
+      output = result.consistency;
+    }
 
     console.log(JSON.stringify(output, null, 2));
 

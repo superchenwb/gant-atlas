@@ -1,0 +1,38 @@
+{
+  "pageId": "test-module/simple-page",
+  "pageName": "simple-page",
+  "module": "test-module",
+  "routes": [
+    {
+      "path": "/**/simple-page",
+      "component": "@simple-page",
+      "title": "测试页面"
+    }
+  ],
+  "fields": [
+    {
+      "name": "userName",
+      "title": "用户名",
+      "componentType": "Input"
+    },
+    {
+      "name": "status",
+      "title": "状态",
+      "componentType": "Select"
+    }
+  ],
+  "columns": [
+    {
+      "fieldName": "userName",
+      "title": "用户名"
+    },
+    {
+      "fieldName": "status",
+      "title": "状态标签"
+    }
+  ],
+  "apis": [
+    { "name": "simplePageFindListApi" },
+    { "name": "simplePageSaveApi" }
+  ]
+}

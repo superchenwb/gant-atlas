@@ -7,6 +7,7 @@ import { createStore } from '../store/sqlite.js';
 import { buildMapping, scanRoutes, scanPageDir, resolveComponentPath } from '../code-scanner.js';
 import { generatePageSkeleton } from '../generator.js';
 import { runConsistencyChecks } from '../mcp/tools/check-consistency.js';
+import { validateStandardPage } from '../validation/page.js';
 import type { CodeToSpecMapping } from '../code-scanner.js';
 import type { GraphNode, GraphEdge } from '../types/graph.js';
 
@@ -202,6 +203,12 @@ export async function runMap(
 
 export interface ValidateResult {
   consistency: ReturnType<typeof runConsistencyChecks>;
+  structure?: {
+    totalPages: number;
+    standardPages: number;
+    nonStandardPages: number;
+    issues: Array<{ pageId: string; title: string; issues: string[] }>;
+  };
   mapping?: CodeToSpecMapping;
   hasIssues: boolean;
 }
@@ -209,7 +216,8 @@ export interface ValidateResult {
 export async function runValidate(
   dbPath: string,
   codeDir?: string,
-  routesFile?: string
+  routesFile?: string,
+  docsPath?: string
 ): Promise<ValidateResult> {
   const store = createStore(dbPath);
   const report = runConsistencyChecks(store);
@@ -217,6 +225,46 @@ export async function runValidate(
   let mappingReport: CodeToSpecMapping | null = null;
   if (codeDir && routesFile) {
     mappingReport = await buildMapping(codeDir, routesFile, store);
+  }
+
+  // 标准页面结构检查
+  let structureReport: ValidateResult['structure'] | undefined;
+  if (docsPath) {
+    const pages = store.listNodesByType('page');
+    const structureIssues: Array<{ pageId: string; title: string; issues: string[] }> = [];
+    let standardCount = 0;
+
+    for (const page of pages) {
+      const rawId = page.id.replace(/^page:/, '');
+      const pageDir = join(docsPath, page.module || '', page.name);
+      try {
+        const sr = validateStandardPage(pageDir);
+        if (sr.isStandard) {
+          standardCount++;
+        } else if (!sr.skippedByCustom) {
+          structureIssues.push({ pageId: rawId, title: page.title, issues: sr.issues });
+        }
+      } catch {
+        // IO error, skip
+      }
+    }
+
+    structureReport = {
+      totalPages: pages.length,
+      standardPages: standardCount,
+      nonStandardPages: structureIssues.length,
+      issues: structureIssues,
+    };
+
+    // 将结构问题合并到一致性报告中
+    for (const si of structureIssues) {
+      report.issues.push({
+        type: 'non_standard_page',
+        description: `页面 "${si.pageId}" (${si.title}) 不符合标准页面结构`,
+        suggestion: si.issues.join('; '),
+      });
+    }
+    report.totalIssues = report.issues.length;
   }
 
   store.close();
@@ -228,10 +276,13 @@ export async function runValidate(
       mappingReport.apiMismatches.length > 0
     : false;
 
+  const structureHasIssues = structureReport ? structureReport.nonStandardPages > 0 : false;
+
   return {
     consistency: report,
+    structure: structureReport,
     mapping: mappingReport ?? undefined,
-    hasIssues: report.totalIssues > 0 || mappingHasIssues,
+    hasIssues: report.totalIssues > 0 || mappingHasIssues || structureHasIssues,
   };
 }
 
