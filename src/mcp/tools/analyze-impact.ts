@@ -1,7 +1,7 @@
 import type { Store } from '../../store/sqlite.js';
 import { clamp } from '../../store/sqlite.js';
 import type { GraphNode, GraphEdge } from '../../types/graph.js';
-import { formatToolError } from './error.js';
+import { formatToolError, formatToolResult } from './error.js';
 
 /**
  * 分析修改某个接口/字段会影响哪些页面。
@@ -35,27 +35,16 @@ export async function handleAnalyzeImpact(store: Store, args: unknown) {
 
     const riskLevel = computeRiskLevel(affectedPages.length, affectedApis.length);
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              target: apiName,
-              targetType: 'api',
-              riskLevel,
-              affectedPages,
-              affectedFields,
-              affectedApis,
-              indirectEffects,
-              summary: `API "${apiName}" 被 ${affectedPages.length} 个页面直接引用，通过字段级联影响 ${indirectEffects.length} 个间接节点。风险等级：${riskLevel}。`,
-            },
-            null,
-            2
-          ),
-        },
-      ],
-    };
+    return formatToolResult({
+      target: apiName,
+      targetType: 'api',
+      riskLevel,
+      affectedPages,
+      affectedFields,
+      affectedApis,
+      indirectEffects,
+      summary: `API "${apiName}" 被 ${affectedPages.length} 个页面直接引用，通过字段级联影响 ${indirectEffects.length} 个间接节点。风险等级：${riskLevel}。`,
+    });
   }
 
   // ─── Case 2: 按字段名称分析影响范围 ───
@@ -69,6 +58,7 @@ export async function handleAnalyzeImpact(store: Store, args: unknown) {
     }
 
     const affectedPageIds = new Set<string>();
+    const indirectEffectIds = new Set<string>();
     const indirectEffects: GraphNode[] = [];
 
     const allEdges = store.listEdges();
@@ -86,7 +76,8 @@ export async function handleAnalyzeImpact(store: Store, args: unknown) {
         for (const fe of fieldEdges) {
           if (fe.type === 'calls') {
             const apiNode = store.getNodeById(fe.target);
-            if (apiNode) {
+            if (apiNode && !indirectEffectIds.has(apiNode.id)) {
+              indirectEffectIds.add(apiNode.id);
               indirectEffects.push(apiNode);
               const { affectedPages: apiPages } = analyzeApiImpact(store, apiNode, safeMaxDepth - 1);
               for (const p of apiPages) {
@@ -104,26 +95,15 @@ export async function handleAnalyzeImpact(store: Store, args: unknown) {
 
     const riskLevel = computeRiskLevel(affectedPages.length, indirectEffects.length);
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              target: fieldName,
-              targetType: 'field',
-              riskLevel,
-              affectedPages,
-              affectedFields: matchingFields,
-              indirectEffects,
-              summary: `字段 "${fieldName}" 出现在 ${affectedPages.length} 个页面中，间接影响 ${indirectEffects.length} 个 API。风险等级：${riskLevel}。`,
-            },
-            null,
-            2
-          ),
-        },
-      ],
-    };
+    return formatToolResult({
+      target: fieldName,
+      targetType: 'field',
+      riskLevel,
+      affectedPages,
+      affectedFields: matchingFields,
+      indirectEffects,
+      summary: `字段 "${fieldName}" 出现在 ${affectedPages.length} 个页面中，间接影响 ${indirectEffects.length} 个 API。风险等级：${riskLevel}。`,
+    });
   }
 
   // ─── Case 3: 按页面 ID 分析影响范围 ───
@@ -150,28 +130,17 @@ export async function handleAnalyzeImpact(store: Store, args: unknown) {
 
     const riskLevel = computeRiskLevel(relatedPages.length, pageApis.length);
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              target: pageId,
-              targetType: 'page',
-              riskLevel,
-              page,
-              nodes: callGraphNodes.filter((n) => n.id !== nodeId),
-              apis: pageApis,
-              relatedPages,
-              edges: callGraphEdges,
-              summary: `页面 "${pageId}" 使用了 ${pageApis.length} 个 API，与 ${relatedPages.length} 个其他页面存在调用关系（深度 ${safeMaxDepth}）。风险等级：${riskLevel}。`,
-            },
-            null,
-            2
-          ),
-        },
-      ],
-    };
+    return formatToolResult({
+      target: pageId,
+      targetType: 'page',
+      riskLevel,
+      page,
+      nodes: callGraphNodes.filter((n) => n.id !== nodeId),
+      apis: pageApis,
+      relatedPages,
+      edges: callGraphEdges,
+      summary: `页面 "${pageId}" 使用了 ${pageApis.length} 个 API，与 ${relatedPages.length} 个其他页面存在调用关系（深度 ${safeMaxDepth}）。风险等级：${riskLevel}。`,
+    });
   }
 
   return formatToolError({
@@ -201,6 +170,7 @@ function analyzeApiImpact(
   const affectedPageIds = new Set<string>();
   const affectedFieldIds = new Set<string>();
   const affectedApiIds = new Set<string>();
+  const indirectEffectIds = new Set<string>();
   const indirectEffects: GraphNode[] = [];
 
   // BFS from the API node (reverse: who calls this API)
@@ -234,7 +204,8 @@ function analyzeApiImpact(
     for (const e of allEdges) {
       if (e.source === id && e.type === 'calls' && e.target !== apiNode.id) {
         const targetNode = store.getNodeById(e.target);
-        if (targetNode && !visited.has(e.target)) {
+        if (targetNode && !visited.has(e.target) && !indirectEffectIds.has(e.target)) {
+          indirectEffectIds.add(e.target);
           indirectEffects.push(targetNode);
           queue.push({ id: e.target, depth: depth + 1 });
         }

@@ -397,6 +397,8 @@ function fallbackSearch(db: Database.Database, keyword: string): GraphNode[] {
   return rows.map(rowToNode);
 }
 
+const CJK_RE = /[一-鿿㐀-䶿]/;
+
 function searchNodesFTS(store: Store, keyword: string): GraphNode[] {
   const db = getStoreDatabase(store);
 
@@ -409,7 +411,8 @@ function searchNodesFTS(store: Store, keyword: string): GraphNode[] {
   }
 
   try {
-    const rows = db
+    // Try original query first
+    let rows = db
       .prepare(
         `SELECT n.* FROM nodes n
          JOIN nodes_fts fts ON n.rowid = fts.rowid
@@ -417,7 +420,21 @@ function searchNodesFTS(store: Store, keyword: string): GraphNode[] {
          LIMIT 100`
       )
       .all(sanitized) as NodeRow[];
-    // FTS5 simple tokenizer splits CJK into single chars; if no match, fallback
+
+    // If empty and keyword contains CJK, try single-char tokenization
+    // FTS5 simple tokenizer indexes CJK as single chars, so "支付" → "支 付"
+    if (rows.length === 0 && CJK_RE.test(sanitized)) {
+      const cjkQuery = sanitized.split('').join(' ');
+      rows = db
+        .prepare(
+          `SELECT n.* FROM nodes n
+           JOIN nodes_fts fts ON n.rowid = fts.rowid
+           WHERE nodes_fts MATCH ?
+           LIMIT 100`
+        )
+        .all(cjkQuery) as NodeRow[];
+    }
+
     if (rows.length === 0) {
       return fallbackSearch(db, keyword);
     }

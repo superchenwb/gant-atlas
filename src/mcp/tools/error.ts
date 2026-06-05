@@ -10,3 +10,9 @@ export function formatToolError(error: ToolError) {
     isError: true,
   };
 }
+
+export function formatToolResult(data: unknown) {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+  };
+}
