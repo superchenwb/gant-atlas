@@ -44,50 +44,47 @@ export async function handleGetCallGraph(store: Store, args: unknown) {
     });
   }
 
-  // ─── BFS traversal ───
-  const visitedNodes = new Set<string>();
-  const visitedEdges = new Set<string>();
-  const resultNodes: GraphNode[] = [];
-  const resultEdges: GraphEdge[] = [];
+  // ─── Graph traversal ───
+  let resultNodes: GraphNode[];
+  let resultEdges: GraphEdge[];
 
-  let queue: Array<{ id: string; depth: number }> = [{ id: nodeId, depth: 0 }];
+  if (safeDirection === 'both') {
+    // Reuse Store layer getCallGraph for bidirectional traversal
+    const result = store.getCallGraph(nodeId, safeMaxDepth);
+    resultNodes = result.nodes;
+    resultEdges = result.edges;
+  } else {
+    // Directional traversal (upstream or downstream only)
+    const visitedNodes = new Set<string>();
+    const visitedEdges = new Set<string>();
+    resultNodes = [];
+    resultEdges = [];
 
-  while (queue.length > 0) {
-    const { id, depth } = queue.shift()!;
-    if (visitedNodes.has(id)) continue;
-    visitedNodes.add(id);
+    let queue: Array<{ id: string; depth: number }> = [{ id: nodeId, depth: 0 }];
 
-    const node = store.getNodeById(id);
-    if (node) resultNodes.push(node);
+    while (queue.length > 0) {
+      const { id, depth } = queue.shift()!;
+      if (visitedNodes.has(id)) continue;
+      visitedNodes.add(id);
 
-    if (depth >= safeMaxDepth) continue;
+      const node = store.getNodeById(id);
+      if (node) resultNodes.push(node);
 
-    // Downstream: edges FROM this node
-    if (safeDirection === 'downstream' || safeDirection === 'both') {
-      const outEdges = store.getEdgesFromSource(id);
-      for (const e of outEdges) {
+      if (depth >= safeMaxDepth) continue;
+
+      const edges = safeDirection === 'downstream'
+        ? store.getEdgesFromSource(id)
+        : store.getEdgesToTarget(id);
+
+      for (const e of edges) {
         const edgeKey = `${e.source}-${e.target}-${e.type}`;
         if (!visitedEdges.has(edgeKey)) {
           visitedEdges.add(edgeKey);
           resultEdges.push(e);
         }
-        if (!visitedNodes.has(e.target)) {
-          queue.push({ id: e.target, depth: depth + 1 });
-        }
-      }
-    }
-
-    // Upstream: edges TO this node
-    if (safeDirection === 'upstream' || safeDirection === 'both') {
-      const inEdges = store.getEdgesToTarget(id);
-      for (const e of inEdges) {
-        const edgeKey = `${e.source}-${e.target}-${e.type}`;
-        if (!visitedEdges.has(edgeKey)) {
-          visitedEdges.add(edgeKey);
-          resultEdges.push(e);
-        }
-        if (!visitedNodes.has(e.source)) {
-          queue.push({ id: e.source, depth: depth + 1 });
+        const nextId = safeDirection === 'downstream' ? e.target : e.source;
+        if (!visitedNodes.has(nextId)) {
+          queue.push({ id: nextId, depth: depth + 1 });
         }
       }
     }
