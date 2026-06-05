@@ -1,18 +1,56 @@
 import { createHash } from 'crypto';
+import { dump as yamlDump } from 'js-yaml';
 import { readdirSync, readFileSync, statSync, mkdirSync, writeFileSync, existsSync } from 'fs';
 import { join, basename } from 'path';
-import { buildGraphAsync } from '../graph/builder.js';
+import { buildProjectAsync } from '../graph/builder.js';
 import { createStore } from '../store/sqlite.js';
 import { buildMapping, scanRoutes, scanPageDir, resolveComponentPath } from '../code-scanner.js';
 import { generatePageSkeleton } from '../generator.js';
 import { runConsistencyChecks } from '../mcp/tools/check-consistency.js';
 import type { CodeToSpecMapping } from '../code-scanner.js';
+import type { GraphNode, GraphEdge } from '../types/graph.js';
 
 export interface IngestResult {
   totalPages: number;
   updated: number;
   skipped: number;
   removed: number;
+}
+
+export function computePageHash(pagePath: string): string {
+  const hash = createHash('sha256');
+  const files = readdirSync(pagePath)
+    .filter((f) => f.toLowerCase().endsWith('.md'))
+    .sort();
+
+  for (const file of files) {
+    const filePath = join(pagePath, file);
+    const stat = statSync(filePath);
+    hash.update(file);
+    hash.update(stat.mtime.toISOString());
+    hash.update(readFileSync(filePath, 'utf-8'));
+  }
+
+  return hash.digest('hex');
+}
+
+/**
+ * 收集与某个 page 相关的所有 node id（通过 edges 关系）
+ */
+function collectPageNodeIds(pageId: string, edges: GraphEdge[]): Set<string> {
+  const result = new Set<string>([pageId]);
+  for (const e of edges) {
+    if (e.source === pageId) {
+      result.add(e.target);
+    }
+  }
+  // field -> api edges
+  for (const e of edges) {
+    if (e.type === 'calls' && result.has(e.source)) {
+      result.add(e.target);
+    }
+  }
+  return result;
 }
 
 export async function runIngest(
@@ -26,69 +64,129 @@ export async function runIngest(
     store.clearProject();
   }
 
-  const existingHashes = store.getPageHashes();
-  const docs = await buildGraphAsync(docsPath);
+  const project = await buildProjectAsync(docsPath);
+  const allPageIds = new Set(
+    project.nodes.filter((n) => n.type === 'page').map((n) => n.id)
+  );
 
-  const seenPageIds = new Set<string>();
-  let updatedCount = 0;
-  let skippedCount = 0;
+  // 获取现有 page 的 hash
+  const existingPages = store.listNodesByType('page');
+  const existingHashMap = new Map<string, string>();
+  for (const p of existingPages) {
+    if (p.contentHash) existingHashMap.set(p.id, p.contentHash);
+  }
 
-  for (const doc of docs) {
-    const pageId = doc.page.id;
-    seenPageIds.add(pageId);
+  const changedPageIds = new Set<string>();
+  const skippedPageIds = new Set<string>();
 
-    const pagePath = join(docsPath, doc.page.module, doc.page.pageName);
+  for (const pageId of allPageIds) {
+    const pageNode = project.nodes.find((n) => n.id === pageId)!;
+    const pagePath = join(docsPath, pageNode.module ?? '', pageNode.name);
     const currentHash = computePageHash(pagePath);
-    const existingHash = existingHashes.get(pageId);
+    const existingHash = existingHashMap.get(pageId);
 
     if (existingHash === currentHash) {
-      skippedCount++;
-      continue;
+      skippedPageIds.add(pageId);
+    } else {
+      changedPageIds.add(pageId);
+    }
+  }
+
+  const removedPageIds = new Set<string>();
+  for (const [pageId] of existingHashMap) {
+    if (!allPageIds.has(pageId)) {
+      removedPageIds.add(pageId);
+    }
+  }
+
+  const pagesToDelete = new Set([...changedPageIds, ...removedPageIds]);
+
+  // 删除旧数据
+  const existingEdges = store.listEdges();
+  for (const pageId of pagesToDelete) {
+    const nodeIds = collectPageNodeIds(pageId, existingEdges);
+    for (const id of nodeIds) {
+      store.deleteNode(id);
+    }
+  }
+
+  // 插入新/更新的 page 数据
+  let updatedCount = 0;
+  for (const pageId of changedPageIds) {
+    const pageNode = project.nodes.find((n) => n.id === pageId)!;
+    const pagePath = join(docsPath, pageNode.module ?? '', pageNode.name);
+    const currentHash = computePageHash(pagePath);
+
+    const nodeIds = collectPageNodeIds(pageId, project.edges);
+    const nodesToInsert = new Map<string, GraphNode>();
+    for (const id of nodeIds) {
+      const node = project.nodes.find((n) => n.id === id);
+      if (node) {
+        nodesToInsert.set(id, id === pageId ? { ...node, contentHash: currentHash } : node);
+      }
     }
 
-    store.deletePageEntities(pageId);
-    store.insertPage(doc.page, currentHash);
-    for (const field of doc.fields) store.insertField(field);
-    for (const col of doc.columns) store.insertGridColumn(col);
-    for (const btn of doc.buttons) store.insertButton(btn);
-    for (const api of doc.apis) store.insertAPI(api);
-    for (const rel of doc.relations.pageHasApis) {
-      store.insertPageAPI(rel.pageId, rel.apiId);
+    for (const node of nodesToInsert.values()) {
+      store.insertNode(node);
     }
-    for (const rel of doc.relations.fieldCallsApis) {
-      store.insertFieldCallsAPI(rel.fieldId, rel.apiId);
+
+    for (const e of project.edges) {
+      if (nodeIds.has(e.source) && nodeIds.has(e.target)) {
+        store.insertEdge(e);
+      }
     }
+
     updatedCount++;
   }
 
-  let removedCount = 0;
-  for (const [pageId] of existingHashes) {
-    if (!seenPageIds.has(pageId)) {
-      store.deletePage(pageId);
-      removedCount++;
+  store.close();
+
+  return {
+    totalPages: allPageIds.size,
+    updated: updatedCount,
+    skipped: skippedPageIds.size,
+    removed: removedPageIds.size,
+  };
+}
+
+export function runQueryPage(pageId: string, dbPath: string): unknown | null {
+  const store = createStore(dbPath);
+  const page = store.getNodeById(`page:${pageId}`);
+  if (!page) {
+    store.close();
+    return null;
+  }
+
+  const edges = store.getEdgesFromSource(page.id);
+  const relatedNodes: GraphNode[] = [];
+  const relatedEdges: GraphEdge[] = [];
+
+  for (const e of edges) {
+    relatedEdges.push(e);
+    const node = store.getNodeById(e.target);
+    if (node) relatedNodes.push(node);
+  }
+
+  // field -> api edges
+  const apiEdges: GraphEdge[] = [];
+  for (const node of relatedNodes.filter((n) => n.type === 'field')) {
+    const fEdges = store.getEdgesFromSource(node.id);
+    for (const e of fEdges) {
+      if (e.type === 'calls') {
+        apiEdges.push(e);
+        const api = store.getNodeById(e.target);
+        if (api) relatedNodes.push(api);
+      }
     }
   }
 
   store.close();
 
   return {
-    totalPages: docs.length,
-    updated: updatedCount,
-    skipped: skippedCount,
-    removed: removedCount,
+    page,
+    nodes: relatedNodes,
+    edges: [...relatedEdges, ...apiEdges],
   };
-}
-
-export function runQueryPage(pageId: string, dbPath: string): unknown | null {
-  const store = createStore(dbPath);
-  const spec = store.getPageSpec(pageId);
-  store.close();
-
-  if (!spec.page) {
-    return null;
-  }
-
-  return spec;
 }
 
 export async function runMap(
@@ -137,21 +235,111 @@ export async function runValidate(
   };
 }
 
-export function computePageHash(pagePath: string): string {
-  const hash = createHash('sha256');
-  const files = readdirSync(pagePath)
-    .filter((f) => f.toLowerCase().endsWith('.md'))
-    .sort();
+export interface ManifestEntry {
+  id: string;
+  type: string;
+  name: string;
+  title: string;
+  summary?: string;
+  tags?: string[];
+  meta?: Record<string, unknown>;
+}
 
-  for (const file of files) {
-    const filePath = join(pagePath, file);
-    const stat = statSync(filePath);
-    hash.update(file);
-    hash.update(stat.mtime.toISOString());
-    hash.update(readFileSync(filePath, 'utf-8'));
+export interface ManifestOutput {
+  pages: ManifestEntry[];
+  fields: ManifestEntry[];
+  columns: ManifestEntry[];
+  buttons: ManifestEntry[];
+  apis: ManifestEntry[];
+  components: ManifestEntry[];
+  methods: ManifestEntry[];
+}
+
+export interface ManifestResult {
+  output: ManifestOutput;
+  yaml: string;
+  json: string;
+}
+
+export function runManifest(dbPath: string): ManifestResult {
+  const store = createStore(dbPath);
+  const nodes = store.listAllNodes();
+  const edges = store.listEdges();
+  store.close();
+
+  const output: ManifestOutput = {
+    pages: [],
+    fields: [],
+    columns: [],
+    buttons: [],
+    apis: [],
+    components: [],
+    methods: [],
+  };
+
+  for (const node of nodes) {
+    const entry: ManifestEntry = {
+      id: node.id,
+      type: node.type,
+      name: node.name,
+      title: node.title,
+      summary: node.summary || undefined,
+      tags: node.tags.length > 0 ? node.tags : undefined,
+      meta: node.meta,
+    };
+
+    switch (node.type) {
+      case 'page':
+        output.pages.push(entry);
+        break;
+      case 'field':
+        output.fields.push(entry);
+        break;
+      case 'column':
+        output.columns.push(entry);
+        break;
+      case 'button':
+        output.buttons.push(entry);
+        break;
+      case 'api':
+        output.apis.push(entry);
+        break;
+      case 'component':
+        output.components.push(entry);
+        break;
+      case 'method':
+        output.methods.push(entry);
+        break;
+    }
   }
 
-  return hash.digest('hex');
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    summary: {
+      totalNodes: nodes.length,
+      totalEdges: edges.length,
+      pages: output.pages.length,
+      fields: output.fields.length,
+      columns: output.columns.length,
+      buttons: output.buttons.length,
+      apis: output.apis.length,
+      components: output.components.length,
+      methods: output.methods.length,
+    },
+    ...output,
+    edges: edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      type: e.type,
+      description: e.description,
+    })),
+  };
+
+  return {
+    output,
+    yaml: yamlDump(manifest),
+    json: JSON.stringify(manifest, null, 2),
+  };
 }
 
 export interface GenerateResult {

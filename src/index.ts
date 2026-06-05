@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { join } from 'path';
 import { serve } from './mcp/server.js';
-import { runIngest, runQueryPage, runMap, runValidate, runGenerate } from './cli/actions.js';
+import { runIngest, runQueryPage, runMap, runValidate, runGenerate, runManifest } from './cli/actions.js';
 import { setupCommand } from './cli/setup.js';
 
 const program = new Command();
@@ -117,6 +117,27 @@ program
     console.error(`[gant-atlas] 生成完成: ${result.generated.length} 个文件, 跳过 ${result.skipped.length} 个已有文件`);
     if (result.skipped.length > 0 && !options.force) {
       console.error(`[gant-atlas] 提示: 使用 --force 可覆盖已有文件`);
+    }
+  });
+
+program
+  .command('manifest')
+  .description('导出项目功能清单（YAML/JSON）')
+  .requiredOption('--db <path>', 'SQLite 数据库文件路径')
+  .option('--format <format>', '输出格式: yaml 或 json', 'yaml')
+  .option('--output <path>', '输出文件路径（默认 stdout）')
+  .action(async (options: { db: string; format?: string; output?: string }) => {
+    const fmt = options.format?.toLowerCase() ?? 'yaml';
+    const result = runManifest(options.db);
+
+    const out = fmt === 'json' ? result.json : result.yaml;
+
+    if (options.output) {
+      const { writeFileSync } = await import('fs');
+      writeFileSync(options.output, out, 'utf-8');
+      console.error(`[gant-atlas] 清单已导出: ${options.output}`);
+    } else {
+      console.log(out);
     }
   });
 

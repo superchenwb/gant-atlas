@@ -12,7 +12,7 @@ describe('createServer', () => {
 
   beforeEach(() => {
     store = createStore(dbPath);
-    store.insertPage({ id: 'mod/page', module: 'mod', pageName: 'page', pageTitle: 'Page' });
+    store.insertNode({ id: 'page:mod/page', type: 'page', name: 'page', title: 'Page', summary: '', tags: [] });
   });
 
   afterEach(() => {
@@ -41,7 +41,11 @@ describe('createServer', () => {
       'analyze_impact',
       'check_consistency',
       'generate_page_spec',
+      'list_entries',
       'list_projects',
+      'explore_context',
+      'get_call_graph',
+      'find_dead_apis',
     ]);
   });
 
@@ -58,7 +62,7 @@ describe('createServer', () => {
 
     const text = (result.content as Array<{ text: string }>)[0].text;
     const parsed = JSON.parse(text);
-    expect(parsed.page.pageTitle).toBe('Page');
+    expect(parsed.page.title).toBe('Page');
   });
 
   it('returns error for unknown project', async () => {

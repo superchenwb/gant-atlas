@@ -11,94 +11,115 @@ describe('handleCheckConsistency', () => {
   beforeEach(() => {
     store = createStore(dbPath);
 
-    // Insert test data
-    store.insertPage({
-      id: 'mod/page-complete',
+    // Insert pages
+    store.insertNode({
+      id: 'page:mod/page-complete',
+      type: 'page',
+      name: 'page-complete',
+      title: 'Complete Page',
+      summary: '',
+      tags: ['list'],
       module: 'mod',
-      pageName: 'page-complete',
-      pageTitle: 'Complete Page',
-      pageType: 'list',
-      route: '/complete',
+      meta: { route: '/complete', pageType: 'list' },
     });
-    store.insertPage({
-      id: 'mod/page-incomplete',
+    store.insertNode({
+      id: 'page:mod/page-incomplete',
+      type: 'page',
+      name: 'page-incomplete',
+      title: 'Incomplete Page',
+      summary: '',
+      tags: [],
       module: 'mod',
-      pageName: 'page-incomplete',
-      pageTitle: 'Incomplete Page',
-      // missing pageType and route
     });
-    store.insertPage({
-      id: 'mod/page-no-fields',
+    store.insertNode({
+      id: 'page:mod/page-no-fields',
+      type: 'page',
+      name: 'page-no-fields',
+      title: 'No Fields Page',
+      summary: '',
+      tags: ['form'],
       module: 'mod',
-      pageName: 'page-no-fields',
-      pageTitle: 'No Fields Page',
-      pageType: 'form',
-      route: '/no-fields',
+      meta: { route: '/no-fields', pageType: 'form' },
     });
-    store.insertPage({
-      id: 'mod/page-no-columns',
+    store.insertNode({
+      id: 'page:mod/page-no-columns',
+      type: 'page',
+      name: 'page-no-columns',
+      title: 'No Columns Page',
+      summary: '',
+      tags: ['form'],
       module: 'mod',
-      pageName: 'page-no-columns',
-      pageTitle: 'No Columns Page',
-      pageType: 'form',
-      route: '/no-columns',
+      meta: { route: '/no-columns', pageType: 'form' },
     });
 
     // Fields for complete page
-    store.insertField({
-      id: 'mod/page-complete/field/0',
-      pageId: 'mod/page-complete',
-      fieldLabel: 'Name',
-      fieldName: 'name',
-      componentType: 'Input',
-      required: true,
+    store.insertNode({
+      id: 'field:mod/page-complete/field/0',
+      type: 'field',
+      name: 'name',
+      title: 'Name',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: true },
     });
-    // This field's name matches an API but has no fieldCallsApis link
-    store.insertField({
-      id: 'mod/page-complete/field/1',
-      pageId: 'mod/page-complete',
-      fieldLabel: 'Status',
-      fieldName: 'findListApi',
-      componentType: 'Select',
-      required: false,
+    store.insertNode({
+      id: 'field:mod/page-complete/field/1',
+      type: 'field',
+      name: 'findListApi',
+      title: 'Status',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Select', required: false },
     });
 
     // Columns for complete page
-    store.insertGridColumn({
-      id: 'mod/page-complete/col/0',
-      pageId: 'mod/page-complete',
-      columnTitle: 'Name',
-      displayContent: 'Name',
-      editable: false,
+    store.insertNode({
+      id: 'column:mod/page-complete/col/0',
+      type: 'column',
+      name: 'name',
+      title: 'Name',
+      summary: 'Name',
+      tags: [],
+      meta: { editable: false },
     });
 
     // Columns for no-columns page (but no fields)
-    store.insertGridColumn({
-      id: 'mod/page-no-columns/col/0',
-      pageId: 'mod/page-no-columns',
-      columnTitle: 'Name',
-      displayContent: 'Name',
-      editable: false,
+    store.insertNode({
+      id: 'column:mod/page-no-columns/col/0',
+      type: 'column',
+      name: 'name',
+      title: 'Name',
+      summary: 'Name',
+      tags: [],
+      meta: { editable: false },
     });
 
     // Fields for no-fields page (but no columns)
-    store.insertField({
-      id: 'mod/page-no-fields/field/0',
-      pageId: 'mod/page-no-fields',
-      fieldLabel: 'Name',
-      fieldName: 'name',
-      componentType: 'Input',
-      required: true,
+    store.insertNode({
+      id: 'field:mod/page-no-fields/field/0',
+      type: 'field',
+      name: 'name',
+      title: 'Name',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: true },
     });
 
     // APIs
-    store.insertAPI({ id: 'api/findListApi', name: 'findListApi' });
-    store.insertAPI({ id: 'api/saveApi', name: 'saveApi' });
-    store.insertAPI({ id: 'api/orphanApi', name: 'orphanApi' });
+    store.insertNode({ id: 'api:api/findListApi', type: 'api', name: 'findListApi', title: 'findListApi', summary: '', tags: [] });
+    store.insertNode({ id: 'api:api/saveApi', type: 'api', name: 'saveApi', title: 'saveApi', summary: '', tags: [] });
+    store.insertNode({ id: 'api:api/orphanApi', type: 'api', name: 'orphanApi', title: 'orphanApi', summary: '', tags: [] });
 
     // page-complete references findListApi at page level
-    store.insertPageAPI('mod/page-complete', 'api/findListApi');
+    store.insertEdge({ source: 'page:mod/page-complete', target: 'api:api/findListApi', type: 'calls' });
     // page-complete's "findListApi" field does NOT have fieldCallsApis link (intentional)
+
+    // contains edges
+    store.insertEdge({ source: 'page:mod/page-complete', target: 'field:mod/page-complete/field/0', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-complete', target: 'field:mod/page-complete/field/1', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-complete', target: 'column:mod/page-complete/col/0', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-no-columns', target: 'column:mod/page-no-columns/col/0', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-no-fields', target: 'field:mod/page-no-fields/field/0', type: 'contains' });
 
     // saveApi is referenced by no one -> orphan
   });
@@ -122,11 +143,7 @@ describe('handleCheckConsistency', () => {
   it('detects pages without fields', async () => {
     const result = parseResult(await handleCheckConsistency(store, {}));
     const emptyFields = result.issues.filter((i: { type: string }) => i.type === 'empty_fields');
-    expect(emptyFields.length).toBe(2); // page-no-fields (no fields wait, actually it has a field)
-    // Wait: page-no-fields HAS a field. page-no-columns has no fields.
-    // page-complete has fields.
-    // page-incomplete has no fields.
-    // So: page-no-columns and page-incomplete have no fields.
+    // page-no-columns and page-incomplete have no fields
     expect(emptyFields.map((i: { description: string }) => i.description)).toEqual(
       expect.arrayContaining([
         expect.stringContaining('page-no-columns'),
@@ -138,7 +155,7 @@ describe('handleCheckConsistency', () => {
   it('detects pages without columns', async () => {
     const result = parseResult(await handleCheckConsistency(store, {}));
     const emptyColumns = result.issues.filter((i: { type: string }) => i.type === 'empty_columns');
-    // page-no-fields has no columns, page-incomplete has no columns
+    // page-no-fields and page-incomplete have no columns
     expect(emptyColumns.length).toBe(2);
   });
 
@@ -180,9 +197,6 @@ describe('handleCheckConsistency', () => {
   });
 
   it('returns success summary when no issues found', async () => {
-    // Check a page that has no issues
-    // page-no-fields has fields, no columns -> will have empty_columns issue
-    // Let's check page-no-columns with pageId filter
     const result = parseResult(await handleCheckConsistency(store, { pageId: 'mod/page-no-columns' }));
     // page-no-columns has no fields but has a column
     // It will have empty_fields issue

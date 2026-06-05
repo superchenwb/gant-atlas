@@ -20,7 +20,7 @@ describe('runIngest', () => {
     expect(result.totalPages).toBeGreaterThanOrEqual(1);
 
     const store = createStore(dbPath);
-    const pages = store.searchPages('', undefined);
+    const pages = store.listNodesByType('page');
     store.close();
 
     expect(pages.length).toBeGreaterThanOrEqual(1);
@@ -51,17 +51,19 @@ describe('runQueryPage', () => {
 
   it('returns page spec when found', () => {
     const store = createStore(dbPath);
-    store.insertPage({ id: 'mod/page', module: 'mod', pageName: 'page', pageTitle: 'Page', pageType: 'list', route: '/test' });
+    store.insertNode({ id: 'page:mod/page', type: 'page', name: 'page', title: 'Page', summary: '', tags: [], module: 'mod', meta: { route: '/test', pageType: 'list' } });
+    store.insertNode({ id: 'field:mod/page/f1', type: 'field', name: 'f1', title: 'F1', summary: '', tags: [] });
+    store.insertEdge({ source: 'page:mod/page', target: 'field:mod/page/f1', type: 'contains' });
     store.close();
 
     const spec = runQueryPage('mod/page', dbPath);
     expect(spec).not.toBeNull();
-    expect((spec as { page: { pageTitle: string } }).page.pageTitle).toBe('Page');
+    expect((spec as { page: { title: string } }).page.title).toBe('Page');
   });
 
   it('returns null when page not found', () => {
     const store = createStore(dbPath);
-    store.insertPage({ id: 'mod/page', module: 'mod', pageName: 'page', pageTitle: 'Page' });
+    store.insertNode({ id: 'page:mod/page', type: 'page', name: 'page', title: 'Page', summary: '', tags: [] });
     store.close();
 
     const spec = runQueryPage('missing/page', dbPath);
@@ -79,13 +81,15 @@ describe('runMap', () => {
 
   it('returns mapping between code and spec', async () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'test-module/simple-page',
+    store.insertNode({
+      id: 'page:test-module/simple-page',
+      type: 'page',
+      name: 'simple-page',
+      title: 'Simple Page',
+      summary: '',
+      tags: [],
       module: 'test-module',
-      pageName: 'simple-page',
-      pageTitle: 'Simple Page',
-      pageType: 'list',
-      route: '/test/page',
+      meta: { route: '/test/page', pageType: 'list' },
     });
     store.close();
 
@@ -105,9 +109,11 @@ describe('runValidate', () => {
 
   it('returns no issues for complete page', async () => {
     const store = createStore(dbPath);
-    store.insertPage({ id: 'test/page', module: 'test', pageName: 'page', pageTitle: 'Page', pageType: 'list', route: '/test' });
-    store.insertField({ id: 'test/page/f1', pageId: 'test/page', fieldLabel: 'Name', fieldName: 'name', componentType: 'Input', required: false });
-    store.insertGridColumn({ id: 'test/page/c1', pageId: 'test/page', columnTitle: 'Name', fieldName: 'name', displayContent: '', editable: false, width: 100, sortable: false, dataType: 'string', align: 'left' });
+    store.insertNode({ id: 'page:test/page', type: 'page', name: 'page', title: 'Page', summary: '', tags: [], module: 'test', meta: { route: '/test', pageType: 'list' } });
+    store.insertNode({ id: 'field:test/page/f1', type: 'field', name: 'name', title: 'Name', summary: '', tags: [], meta: { componentType: 'Input', required: false } });
+    store.insertNode({ id: 'column:test/page/c1', type: 'column', name: 'name', title: 'Name', summary: 'Name', tags: [], meta: { editable: false } });
+    store.insertEdge({ source: 'page:test/page', target: 'field:test/page/f1', type: 'contains' });
+    store.insertEdge({ source: 'page:test/page', target: 'column:test/page/c1', type: 'contains' });
     store.close();
 
     const result = await runValidate(dbPath);
@@ -117,7 +123,7 @@ describe('runValidate', () => {
 
   it('returns issues for incomplete page', async () => {
     const store = createStore(dbPath);
-    store.insertPage({ id: 'test/page', module: 'test', pageName: 'page', pageTitle: 'Page' });
+    store.insertNode({ id: 'page:test/page', type: 'page', name: 'page', title: 'Page', summary: '', tags: [], module: 'test' });
     store.close();
 
     const result = await runValidate(dbPath);
@@ -127,13 +133,15 @@ describe('runValidate', () => {
 
   it('includes mapping report when codeDir and routesFile provided', async () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'test-module/simple-page',
+    store.insertNode({
+      id: 'page:test-module/simple-page',
+      type: 'page',
+      name: 'simple-page',
+      title: 'Simple Page',
+      summary: '',
+      tags: [],
       module: 'test-module',
-      pageName: 'simple-page',
-      pageTitle: 'Simple Page',
-      pageType: 'list',
-      route: '/test/page',
+      meta: { route: '/test/page', pageType: 'list' },
     });
     store.close();
 
