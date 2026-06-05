@@ -33,10 +33,24 @@ program
     new Command('serve')
       .description('以 stdio 模式启动 MCP Server')
       .option('--db <path>', '全局 SQLite 数据库文件路径（单项目模式，不推荐）')
-      .requiredOption('--config <path>', '项目配置文件路径 (JSON)')
-      .action(async (options: { db?: string; config: string }) => {
-        const { readFileSync } = await import('fs');
-        const rawProjects = JSON.parse(readFileSync(options.config, 'utf-8')) as Array<{
+      .option('--config <path>', '项目配置文件路径 (JSON)，默认 ~/.gant-atlas/projects.json')
+      .action(async (options: { db?: string; config?: string }) => {
+        const { readFileSync, existsSync } = await import('fs');
+        const { homedir } = await import('os');
+
+        let configPath = options.config;
+        if (!configPath) {
+          const globalConfig = join(homedir(), '.gant-atlas', 'projects.json');
+          if (existsSync(globalConfig)) {
+            configPath = globalConfig;
+          } else {
+            console.error('[gant-atlas] 错误: 未指定 --config，且 ~/.gant-atlas/projects.json 不存在');
+            console.error('[gant-atlas] 请运行: gant-atlas setup 或提供 --config 参数');
+            process.exit(1);
+          }
+        }
+
+        const rawProjects = JSON.parse(readFileSync(configPath, 'utf-8')) as Array<{
           id: string;
           name: string;
           docsPath: string;
@@ -47,7 +61,7 @@ program
           id: p.id,
           name: p.name,
           docsPath: p.docsPath,
-          dbPath: p.dbPath ?? options.db ?? join(p.docsPath, '..', '.gant', 'business-graph.db'),
+          dbPath: p.dbPath ?? options.db ?? join(p.docsPath, '..', '.gant-atlas', 'business-graph.db'),
         }));
 
         await serve({ projects });

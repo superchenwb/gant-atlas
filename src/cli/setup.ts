@@ -268,13 +268,19 @@ export async function setupCommand(): Promise<SetupResult> {
   const binary = resolveBin() ?? getNpxBin();
 
   // Prompt for projects.json path
-  const defaultPath = join(process.cwd(), 'projects.json');
+  const globalDir = join(homedir(), '.gant-atlas');
+  const defaultPath = join(globalDir, 'projects.json');
   const input = await prompt(
     `请输入 projects.json 配置文件路径 [${defaultPath}]: `
   );
   let configPath = input || defaultPath;
   if (!configPath.startsWith('/')) {
     configPath = join(process.cwd(), configPath);
+  }
+
+  // Auto-create global directory if using default path
+  if (configPath === defaultPath && !existsSync(globalDir)) {
+    mkdirSync(globalDir, { recursive: true });
   }
 
   if (!existsSync(configPath)) {

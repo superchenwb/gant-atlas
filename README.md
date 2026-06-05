@@ -86,10 +86,13 @@ pnpm run dev map \
 
 ```bash
 # 方式一：pnpm script（使用编译后的 dist/）
-pnpm run mcp --config ./projects.json
+pnpm run mcp
 
 # 方式二：直接运行
-node dist/index.js mcp serve --config ./projects.json
+node dist/index.js mcp serve
+
+# 显式指定配置文件（可选）
+pnpm run mcp --config ./projects.json
 ```
 
 `projects.json` 示例：
@@ -104,7 +107,7 @@ node dist/index.js mcp serve --config ./projects.json
 ]
 ```
 
-每个项目会自动在 `docsPath` 同级目录下创建 `.gant/business-graph.db`。也可以通过 `dbPath` 字段显式指定。
+每个项目会自动在 `docsPath` 同级目录下创建 `.gant-atlas/business-graph.db`。也可以通过 `dbPath` 字段显式指定。全局配置默认保存在 `~/.gant-atlas/projects.json`。也可以通过 `--config` 参数显式指定。
 
 ### 可用工具
 
