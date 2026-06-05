@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createStore, migrate, migrations, getStoreDatabase } from '../../src/store/sqlite.js';
+import { createStore, migrate, getStoreDatabase } from '../../src/store/sqlite.js';
 import Database from 'better-sqlite3';
 import { join } from 'path';
 import { rmSync } from 'fs';
@@ -17,171 +17,163 @@ describe('SQLite Store', () => {
     try { rmSync(dbPath); } catch { /* ignore */ }
   });
 
-  it('initializes schema', () => {
+  it('initializes schema with nodes and edges tables', () => {
     const tables = getStoreDatabase(store).prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
     const names = tables.map((t) => t.name);
-    expect(names).toContain('pages');
-    expect(names).toContain('fields');
-    expect(names).toContain('grid_columns');
-    expect(names).toContain('buttons');
-    expect(names).toContain('apis');
+    expect(names).toContain('nodes');
+    expect(names).toContain('edges');
   });
 
-  it('inserts and retrieves a page', () => {
-    const page = {
-      id: 'test/page',
+  it('inserts and retrieves a node', () => {
+    const node = {
+      id: 'page:test/page',
+      type: 'page' as const,
+      name: 'page',
+      title: 'Test Page',
+      summary: 'Testing',
+      tags: ['list'],
       module: 'test',
-      pageName: 'page',
-      pageTitle: 'Test Page',
-      pageType: 'list',
-      route: '/test',
-      pageFunction: 'Testing',
+      meta: { route: '/test' },
     };
 
-    store.insertPage(page);
-    const spec = store.getPageSpec('test/page');
-    expect(spec.page).toEqual(page);
+    store.insertNode(node);
+    const retrieved = store.getNodeById('page:test/page');
+    expect(retrieved).toEqual(node);
   });
 
-  it('searches pages by keyword', () => {
-    store.insertPage({
-      id: 'mod/a',
-      module: 'mod',
-      pageName: 'a',
-      pageTitle: 'Alpha',
-    });
-    store.insertPage({
-      id: 'mod/b',
-      module: 'mod',
-      pageName: 'b',
-      pageTitle: 'Beta',
-    });
+  it('searches nodes by keyword', () => {
+    store.insertNode({ id: 'page:mod/a', type: 'page', name: 'a', title: 'Alpha', summary: '', tags: [] });
+    store.insertNode({ id: 'page:mod/b', type: 'page', name: 'b', title: 'Beta', summary: '', tags: [] });
 
-    const results = store.searchPages('Alpha');
+    const results = store.searchNodes('Alpha');
     expect(results.length).toBe(1);
-    expect(results[0].pageTitle).toBe('Alpha');
+    expect(results[0].title).toBe('Alpha');
   });
 
-  it('inserts page with content hash', () => {
-    store.insertPage(
-      { id: 'test/hash', module: 'test', pageName: 'hash', pageTitle: 'Hash' },
-      'abc123'
-    );
-    const hashes = store.getPageHashes();
-    expect(hashes.get('test/hash')).toBe('abc123');
-  });
-
-  it('deletes page and cascades entities', () => {
-    store.insertPage({ id: 'del/page', module: 'del', pageName: 'page', pageTitle: 'Del' });
-    store.insertField({
-      id: 'del/page/f1',
-      pageId: 'del/page',
-      fieldLabel: 'F',
-      fieldName: 'f',
-      componentType: 'Input',
-      required: false,
+  it('inserts node with content hash', () => {
+    store.insertNode({
+      id: 'page:test/hash',
+      type: 'page',
+      name: 'hash',
+      title: 'Hash',
+      summary: '',
+      tags: [],
+      contentHash: 'abc123',
     });
+    const node = store.getNodeById('page:test/hash');
+    expect(node?.contentHash).toBe('abc123');
+  });
 
-    store.deletePage('del/page');
-    const spec = store.getPageSpec('del/page');
-    expect(spec.page).toBeNull();
-    expect(spec.fields).toHaveLength(0);
+  it('deletes node and cascades edges', () => {
+    store.insertNode({ id: 'page:del/page', type: 'page', name: 'page', title: 'Del', summary: '', tags: [] });
+    store.insertNode({ id: 'field:del/page/f1', type: 'field', name: 'f1', title: 'F', summary: '', tags: [] });
+    store.insertEdge({ source: 'page:del/page', target: 'field:del/page/f1', type: 'contains' });
+
+    store.deleteNode('page:del/page');
+    expect(store.getNodeById('page:del/page')).toBeNull();
+    expect(store.listEdges().length).toBe(0);
   });
 
   it('clears all project data', () => {
-    store.insertPage({ id: 'clr/a', module: 'clr', pageName: 'a', pageTitle: 'A' });
-    store.insertAPI({ id: 'api/x', name: 'xApi' });
-    store.insertPageAPI('clr/a', 'api/x');
+    store.insertNode({ id: 'page:clr/a', type: 'page', name: 'a', title: 'A', summary: '', tags: [] });
+    store.insertNode({ id: 'api:api/x', type: 'api', name: 'x', title: 'x', summary: '', tags: [] });
+    store.insertEdge({ source: 'page:clr/a', target: 'api:api/x', type: 'calls' });
 
     store.clearProject();
 
-    const pages = getStoreDatabase(store).prepare('SELECT COUNT(*) as c FROM pages').get() as { c: number };
-    expect(pages.c).toBe(0);
-    const apis = getStoreDatabase(store).prepare('SELECT COUNT(*) as c FROM apis').get() as { c: number };
-    expect(apis.c).toBe(0);
+    const nodes = getStoreDatabase(store).prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number };
+    expect(nodes.c).toBe(0);
+    const edges = getStoreDatabase(store).prepare('SELECT COUNT(*) as c FROM edges').get() as { c: number };
+    expect(edges.c).toBe(0);
   });
 
-  it('inserts and retrieves grid columns', () => {
-    store.insertPage({ id: 'gc/page', module: 'gc', pageName: 'page', pageTitle: 'GC' });
-    store.insertGridColumn({
-      id: 'gc/page/c1',
-      pageId: 'gc/page',
-      columnTitle: 'Col',
-      fieldName: 'col',
-      displayContent: 'Content',
-      editable: true,
-      width: 120,
-      sortable: true,
-      dataType: 'string',
-      align: 'center',
+  it('inserts and retrieves edges', () => {
+    store.insertNode({ id: 'page:p1', type: 'page', name: 'p1', title: 'P1', summary: '', tags: [] });
+    store.insertNode({ id: 'field:p1/f1', type: 'field', name: 'f1', title: 'F1', summary: '', tags: [] });
+    store.insertEdge({ source: 'page:p1', target: 'field:p1/f1', type: 'contains' });
+
+    const edges = store.listEdges();
+    expect(edges.length).toBe(1);
+    expect(edges[0].type).toBe('contains');
+  });
+
+  it('filters nodes by type', () => {
+    store.insertNode({ id: 'page:p1', type: 'page', name: 'p1', title: 'P1', summary: '', tags: [] });
+    store.insertNode({ id: 'field:f1', type: 'field', name: 'f1', title: 'F1', summary: '', tags: [] });
+    store.insertNode({ id: 'api:a1', type: 'api', name: 'a1', title: 'A1', summary: '', tags: [] });
+
+    expect(store.listNodesByType('page').length).toBe(1);
+    expect(store.listNodesByType('field').length).toBe(1);
+    expect(store.listNodesByType('api').length).toBe(1);
+  });
+
+  it('returns empty for missing node', () => {
+    const node = store.getNodeById('nonexistent');
+    expect(node).toBeNull();
+  });
+
+  describe('FTS5 search', () => {
+    it('has FTS5 availability check', () => {
+      expect(typeof store.isFTS5Available()).toBe('boolean');
     });
 
-    const spec = store.getPageSpec('gc/page');
-    expect(spec.columns).toHaveLength(1);
-    expect(spec.columns[0].columnTitle).toBe('Col');
-    expect(spec.columns[0].editable).toBe(true);
-    expect(spec.columns[0].width).toBe(120);
-    expect(spec.columns[0].sortable).toBe(true);
-    expect(spec.columns[0].align).toBe('center');
+    it('searches nodes via FTS5 or fallback', () => {
+      store.insertNode({ id: 'page:fts/a', type: 'page', name: 'a', title: 'FTS Alpha', summary: 'searchable content', tags: [] });
+      store.insertNode({ id: 'page:fts/b', type: 'page', name: 'b', title: 'FTS Beta', summary: 'another content', tags: [] });
+
+      const results = store.searchNodesFTS('Alpha');
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      expect(results.some((r) => r.title === 'FTS Alpha')).toBe(true);
+    });
   });
 
-  it('inserts and retrieves buttons', () => {
-    store.insertPage({ id: 'btn/page', module: 'btn', pageName: 'page', pageTitle: 'Btn' });
-    store.insertButton({
-      id: 'btn/page/b1',
-      pageId: 'btn/page',
-      buttonName: 'Save',
-      scope: 'page',
-      position: 'top',
-      displayCondition: '',
-      disabledCondition: '',
-      clickResult: 'save',
-      confirmRequired: true,
+  describe('call graph', () => {
+    it('returns nodes and edges for a given node', () => {
+      store.insertNode({ id: 'page:cg/a', type: 'page', name: 'a', title: 'A', summary: '', tags: [] });
+      store.insertNode({ id: 'api:cg/x', type: 'api', name: 'x', title: 'X', summary: '', tags: [] });
+      store.insertEdge({ source: 'page:cg/a', target: 'api:cg/x', type: 'calls' });
+
+      const graph = store.getCallGraph('page:cg/a', 2);
+      expect(graph.nodes.length).toBeGreaterThanOrEqual(2);
+      expect(graph.edges.length).toBe(1);
     });
 
-    const spec = store.getPageSpec('btn/page');
-    expect(spec.buttons).toHaveLength(1);
-    expect(spec.buttons[0].buttonName).toBe('Save');
-    expect(spec.buttons[0].confirmRequired).toBe(true);
-  });
+    it('limits depth for call graph', () => {
+      store.insertNode({ id: 'page:cg/a', type: 'page', name: 'a', title: 'A', summary: '', tags: [] });
+      store.insertNode({ id: 'api:cg/x', type: 'api', name: 'x', title: 'X', summary: '', tags: [] });
+      store.insertNode({ id: 'api:cg/y', type: 'api', name: 'y', title: 'Y', summary: '', tags: [] });
+      store.insertEdge({ source: 'page:cg/a', target: 'api:cg/x', type: 'calls' });
+      store.insertEdge({ source: 'api:cg/x', target: 'api:cg/y', type: 'calls' });
 
-  it('inserts APIs and links to pages', () => {
-    store.insertPage({ id: 'api/page', module: 'api', pageName: 'page', pageTitle: 'API' });
-    store.insertAPI({ id: 'api/findApi', name: 'findApi', description: 'Find' });
-    store.insertPageAPI('api/page', 'api/findApi');
+      const shallow = store.getCallGraph('page:cg/a', 1);
+      const deep = store.getCallGraph('page:cg/a', 2);
 
-    const spec = store.getPageSpec('api/page');
-    expect(spec.apis).toHaveLength(1);
-    expect(spec.apis[0].name).toBe('findApi');
-  });
-
-  it('inserts field calls api relation', () => {
-    store.insertPage({ id: 'fapi/page', module: 'fapi', pageName: 'page', pageTitle: 'FAPI' });
-    store.insertField({
-      id: 'fapi/page/f1',
-      pageId: 'fapi/page',
-      fieldLabel: 'F',
-      fieldName: 'findApi',
-      componentType: 'Input',
-      required: false,
+      expect(deep.nodes.length).toBeGreaterThanOrEqual(shallow.nodes.length);
     });
-    store.insertAPI({ id: 'api/findApi', name: 'findApi' });
-    store.insertFieldCallsAPI('fapi/page/f1', 'api/findApi');
-
-    // Verify relation exists in join table directly
-    const rows = getStoreDatabase(store)
-      .prepare("SELECT * FROM field_calls_apis WHERE field_id = ? AND api_id = ?")
-      .all('fapi/page/f1', 'api/findApi') as Array<Record<string, unknown>>;
-    expect(rows.length).toBe(1);
   });
 
-  it('returns empty arrays for missing page', () => {
-    const spec = store.getPageSpec('nonexistent/page');
-    expect(spec.page).toBeNull();
-    expect(spec.fields).toEqual([]);
-    expect(spec.columns).toEqual([]);
-    expect(spec.buttons).toEqual([]);
-    expect(spec.apis).toEqual([]);
+  describe('dead code detection', () => {
+    it('finds APIs with no incoming edges', () => {
+      store.insertNode({ id: 'api:dead/x', type: 'api', name: 'x', title: 'X', summary: '', tags: [] });
+      store.insertNode({ id: 'api:dead/y', type: 'api', name: 'y', title: 'Y', summary: '', tags: [] });
+      store.insertNode({ id: 'page:dead/p', type: 'page', name: 'p', title: 'P', summary: '', tags: [] });
+      store.insertEdge({ source: 'page:dead/p', target: 'api:dead/x', type: 'calls' });
+
+      const dead = store.findDeadApis();
+      expect(dead.length).toBe(1);
+      expect(dead[0].name).toBe('y');
+    });
+
+    it('finds orphan fields with no containing page', () => {
+      store.insertNode({ id: 'field:orphan/a', type: 'field', name: 'a', title: 'A', summary: '', tags: [] });
+      store.insertNode({ id: 'field:orphan/b', type: 'field', name: 'b', title: 'B', summary: '', tags: [] });
+      store.insertNode({ id: 'page:orphan/p', type: 'page', name: 'p', title: 'P', summary: '', tags: [] });
+      store.insertEdge({ source: 'page:orphan/p', target: 'field:orphan/a', type: 'contains' });
+
+      const orphans = store.findOrphanFields();
+      expect(orphans.length).toBe(1);
+      expect(orphans[0].name).toBe('b');
+    });
   });
 });
 
@@ -200,8 +192,8 @@ describe('Schema Migration', () => {
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
     const names = tables.map((t) => t.name);
-    expect(names).toContain('pages');
-    expect(names).toContain('fields');
+    expect(names).toContain('nodes');
+    expect(names).toContain('edges');
     db.close();
   });
 
@@ -214,22 +206,6 @@ describe('Schema Migration', () => {
       | { version: number }
       | undefined;
     expect(versionRow?.version).toBeGreaterThanOrEqual(1);
-    db.close();
-  });
-
-  it('applies only pending migrations', () => {
-    const db = new Database(dbPath);
-
-    // Seed as version 1 already applied
-    db.exec(`CREATE TABLE __version (key TEXT PRIMARY KEY, version INTEGER NOT NULL)`);
-    db.prepare("INSERT INTO __version (key, version) VALUES ('schema', 1)").run();
-
-    // Manually create v1 tables so migration 1 can be skipped
-    db.exec(`CREATE TABLE pages (id TEXT PRIMARY KEY)`);
-
-    // Run migrations targeting v2
-    const finalVersion = migrate(db, 2, migrations);
-    expect(finalVersion).toBe(2);
     db.close();
   });
 

@@ -1,11 +1,5 @@
 import Database from 'better-sqlite3';
-import type {
-  Page,
-  Field,
-  GridColumn,
-  Button,
-  API,
-} from '../types/index.js';
+import type { GraphNode, GraphEdge, NodeType, EdgeType } from '../types/graph.js';
 
 export const SCHEMA_VERSION = 2;
 
@@ -13,41 +7,53 @@ export interface Migration {
   version: number;
   name: string;
   up: (db: Database.Database) => void;
+  down?: (db: Database.Database) => void;
+}
+
+// ─── Input validation helpers (DX fix: DoS protection) ───
+
+export const MAX_INPUT_LENGTH = 10_000;
+export const MAX_PATH_LENGTH = 4_096;
+
+export function validateInputLength(input: string, maxLength: number = MAX_INPUT_LENGTH): string | null {
+  if (input.length > maxLength) return `Input exceeds max length (${maxLength})`;
+  return null;
+}
+
+export function clamp(num: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, num));
 }
 
 export interface Store {
   initSchema(): void;
-  insertPage(page: Page, contentHash?: string): void;
-  insertField(field: Field): void;
-  insertGridColumn(column: GridColumn): void;
-  insertButton(button: Button): void;
-  insertAPI(api: API): void;
-  insertPageAPI(pageId: string, apiId: string): void;
-  insertFieldCallsAPI(fieldId: string, apiId: string): void;
-  deletePageEntities(pageId: string): void;
-  deletePage(pageId: string): void;
-  getPageHashes(): Map<string, string>;
-  getPageSpec(pageId: string): {
-    page: Page | null;
-    fields: Field[];
-    columns: GridColumn[];
-    buttons: Button[];
-    apis: API[];
-  };
-  searchPages(keyword: string, module?: string): Page[];
+
+  // ─── 统一图谱模型接口 ───
+  insertNode(node: GraphNode): void;
+  insertEdge(edge: GraphEdge): void;
+  listNodesByType(type: NodeType): GraphNode[];
+  listAllNodes(): GraphNode[];
+  searchNodes(keyword: string): GraphNode[];
+  listEdges(): GraphEdge[];
+  deleteNode(nodeId: string): void;
+  deleteEdgesForNode(nodeId: string): void;
+  getNodeById(nodeId: string): GraphNode | null;
+  getEdgesFromSource(sourceId: string): GraphEdge[];
+  getEdgesToTarget(targetId: string): GraphEdge[];
+
+  // ─── Phase 1 新增接口 ───
+  searchNodesFTS(keyword: string): GraphNode[];
+  getCallGraph(nodeId: string, maxDepth?: number): { nodes: GraphNode[]; edges: GraphEdge[] };
+  findDeadApis(): GraphNode[];
+  findOrphanFields(): GraphNode[];
+  isFTS5Available(): boolean;
+
   clearProject(): void;
   close(): void;
 }
 
-// Internal WeakMap to allow tightly-coupled modules (consistency checks, impact analysis)
-// to access the underlying database without exposing it on the public Store interface.
+// Internal WeakMap to allow tightly-coupled modules to access raw SQL
 const dbMap = new WeakMap<Store, Database.Database>();
 
-/**
- * Get the underlying better-sqlite3 database instance from a Store.
- * This is intentionally NOT part of the Store interface — it requires an explicit
- * import and signals "I know what I'm doing, I need raw SQL access."
- */
 export function getStoreDatabase(store: Store): Database.Database {
   const db = dbMap.get(store);
   if (!db) throw new Error('Store database instance not found');
@@ -57,90 +63,92 @@ export function getStoreDatabase(store: Store): Database.Database {
 export const migrations: Migration[] = [
   {
     version: 1,
-    name: 'init_tables',
+    name: 'unified_graph',
     up(db) {
       db.exec(`
-        CREATE TABLE IF NOT EXISTS pages (
+        CREATE TABLE IF NOT EXISTS nodes (
           id TEXT PRIMARY KEY,
-          module TEXT NOT NULL,
-          page_name TEXT NOT NULL,
-          page_title TEXT NOT NULL,
-          page_type TEXT,
-          route TEXT,
-          page_function TEXT
+          type TEXT NOT NULL,
+          name TEXT NOT NULL,
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          tags TEXT NOT NULL DEFAULT '[]',
+          meta TEXT,
+          module TEXT,
+          docs_path TEXT,
+          content_hash TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS fields (
-          id TEXT PRIMARY KEY,
-          page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-          field_label TEXT NOT NULL,
-          field_name TEXT NOT NULL,
-          component_type TEXT NOT NULL,
-          required INTEGER NOT NULL DEFAULT 0,
-          default_value TEXT
+        CREATE TABLE IF NOT EXISTS edges (
+          source TEXT NOT NULL,
+          target TEXT NOT NULL,
+          type TEXT NOT NULL,
+          description TEXT,
+          PRIMARY KEY (source, target, type)
         );
 
-        CREATE TABLE IF NOT EXISTS grid_columns (
-          id TEXT PRIMARY KEY,
-          page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-          column_title TEXT NOT NULL,
-          field_name TEXT,
-          display_content TEXT NOT NULL,
-          editable INTEGER NOT NULL DEFAULT 0,
-          width INTEGER,
-          sortable INTEGER DEFAULT 0,
-          data_type TEXT,
-          align TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS buttons (
-          id TEXT PRIMARY KEY,
-          page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-          button_name TEXT NOT NULL,
-          scope TEXT NOT NULL,
-          position TEXT NOT NULL,
-          display_condition TEXT,
-          disabled_condition TEXT,
-          click_result TEXT NOT NULL,
-          confirm_required INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS apis (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL UNIQUE,
-          description TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS field_calls_apis (
-          field_id TEXT NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
-          api_id TEXT NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
-          PRIMARY KEY (field_id, api_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS page_calls_apis (
-          page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-          api_id TEXT NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
-          PRIMARY KEY (page_id, api_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_pages_module ON pages(module);
-        CREATE INDEX IF NOT EXISTS idx_fields_page_id ON fields(page_id);
-        CREATE INDEX IF NOT EXISTS idx_grid_columns_page_id ON grid_columns(page_id);
-        CREATE INDEX IF NOT EXISTS idx_buttons_page_id ON buttons(page_id);
-        CREATE INDEX IF NOT EXISTS idx_apis_name ON apis(name);
+        CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
+        CREATE INDEX IF NOT EXISTS idx_nodes_module ON nodes(module);
+        CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
+        CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
+        CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
+      `);
+    },
+    down(db) {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_edges_target;
+        DROP INDEX IF EXISTS idx_edges_source;
+        DROP INDEX IF EXISTS idx_nodes_name;
+        DROP INDEX IF EXISTS idx_nodes_module;
+        DROP INDEX IF EXISTS idx_nodes_type;
+        DROP TABLE IF EXISTS edges;
+        DROP TABLE IF EXISTS nodes;
+        DROP TABLE IF EXISTS __version;
       `);
     },
   },
   {
     version: 2,
-    name: 'add_content_hash',
+    name: 'fts5_search',
     up(db) {
-      const hasColumn = db.prepare(
-        "SELECT 1 FROM pragma_table_info('pages') WHERE name = 'content_hash'"
-      ).get() as { '1': number } | undefined;
-      if (!hasColumn) {
-        db.exec(`ALTER TABLE pages ADD COLUMN content_hash TEXT`);
-      }
+      // FTS5 virtual table for full-text search over nodes
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
+          id, name, title, summary,
+          content='nodes', content_rowid='rowid'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
+          INSERT INTO nodes_fts(rowid, id, name, title, summary)
+          VALUES (NEW.rowid, NEW.id, NEW.name, NEW.title, NEW.summary);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
+          INSERT INTO nodes_fts(nodes_fts, rowid, id, name, title, summary)
+          VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.title, OLD.summary);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
+          INSERT INTO nodes_fts(nodes_fts, rowid, id, name, title, summary)
+          VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.title, OLD.summary);
+          INSERT INTO nodes_fts(rowid, id, name, title, summary)
+          VALUES (NEW.rowid, NEW.id, NEW.name, NEW.title, NEW.summary);
+        END;
+      `);
+
+      // Backfill existing nodes into FTS index
+      db.exec(`
+        INSERT INTO nodes_fts(rowid, id, name, title, summary)
+        SELECT rowid, id, name, title, summary FROM nodes;
+      `);
+    },
+    down(db) {
+      db.exec(`
+        DROP TRIGGER IF EXISTS nodes_ai;
+        DROP TRIGGER IF EXISTS nodes_ad;
+        DROP TRIGGER IF EXISTS nodes_au;
+        DROP TABLE IF EXISTS nodes_fts;
+      `);
     },
   },
 ];
@@ -166,6 +174,9 @@ export function migrate(
     .filter((m) => m.version > currentVersion && m.version <= targetVersion)
     .sort((a, b) => a.version - b.version);
 
+  // Note: production deployments should manually backup before running migrations.
+  // Auto-backup was removed because it caused race conditions in parallel test runners.
+
   for (const m of pending) {
     m.up(db);
     currentVersion = m.version;
@@ -184,18 +195,23 @@ export function createStore(dbPath: string): Store {
 
   const store: Store = {
     initSchema: () => migrate(db),
-    insertPage: (page, contentHash) => insertPage(db, page, contentHash),
-    insertField: (field) => insertField(db, field),
-    insertGridColumn: (column) => insertGridColumn(db, column),
-    insertButton: (button) => insertButton(db, button),
-    insertAPI: (api) => insertAPI(db, api),
-    insertPageAPI: (pageId, apiId) => insertPageAPI(db, pageId, apiId),
-    insertFieldCallsAPI: (fieldId, apiId) => insertFieldCallsAPI(db, fieldId, apiId),
-    deletePageEntities: (pageId) => deletePageEntities(db, pageId),
-    deletePage: (pageId) => deletePage(db, pageId),
-    getPageHashes: () => getPageHashes(db),
-    getPageSpec: (pageId) => getPageSpec(db, pageId),
-    searchPages: (keyword, module) => searchPages(db, keyword, module),
+    insertNode: (node) => insertNode(db, node),
+    insertEdge: (edge) => insertEdge(db, edge),
+    listNodesByType: (type) => listNodesByType(db, type),
+    listAllNodes: () => listAllNodes(db),
+    searchNodes: (keyword) => searchNodes(db, keyword),
+    listEdges: () => listEdges(db),
+    deleteNode: (nodeId) => deleteNode(db, nodeId),
+    deleteEdgesForNode: (nodeId) => deleteEdgesForNode(db, nodeId),
+    getNodeById: (nodeId) => getNodeById(db, nodeId),
+    getEdgesFromSource: (sourceId) => getEdgesFromSource(db, sourceId),
+    getEdgesToTarget: (targetId) => getEdgesToTarget(db, targetId),
+    // Phase 1 new methods
+    searchNodesFTS: (keyword) => searchNodesFTS(store, keyword),
+    getCallGraph: (nodeId, maxDepth) => getCallGraph(store, nodeId, maxDepth),
+    findDeadApis: () => findDeadApis(store),
+    findOrphanFields: () => findOrphanFields(store),
+    isFTS5Available: () => checkFTS5Available(db),
     clearProject: () => clearProject(db),
     close: () => db.close(),
   };
@@ -205,320 +221,307 @@ export function createStore(dbPath: string): Store {
   return store;
 }
 
-function insertPage(db: Database.Database, page: Page, contentHash?: string): void {
-  db.prepare(
-    `INSERT INTO pages (id, module, page_name, page_title, page_type, route, page_function, content_hash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       module = excluded.module,
-       page_name = excluded.page_name,
-       page_title = excluded.page_title,
-       page_type = excluded.page_type,
-       route = excluded.route,
-       page_function = excluded.page_function,
-       content_hash = excluded.content_hash`
-  ).run(
-    page.id,
-    page.module,
-    page.pageName,
-    page.pageTitle,
-    page.pageType ?? null,
-    page.route ?? null,
-    page.pageFunction ?? null,
-    contentHash ?? null
-  );
-}
+// ─── Node operations ───
 
-function insertField(db: Database.Database, field: Field): void {
+function insertNode(db: Database.Database, node: GraphNode): void {
   db.prepare(
-    `INSERT INTO fields (id, page_id, field_label, field_name, component_type, required, default_value)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       page_id = excluded.page_id,
-       field_label = excluded.field_label,
-       field_name = excluded.field_name,
-       component_type = excluded.component_type,
-       required = excluded.required,
-       default_value = excluded.default_value`
-  ).run(
-    field.id,
-    field.pageId,
-    field.fieldLabel,
-    field.fieldName,
-    field.componentType,
-    field.required ? 1 : 0,
-    field.defaultValue ?? null
-  );
-}
-
-function insertGridColumn(db: Database.Database, column: GridColumn): void {
-  db.prepare(
-    `INSERT INTO grid_columns (id, page_id, column_title, field_name, display_content, editable, width, sortable, data_type, align)
+    `INSERT INTO nodes (id, type, name, title, summary, tags, meta, module, docs_path, content_hash)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
-       page_id = excluded.page_id,
-       column_title = excluded.column_title,
-       field_name = excluded.field_name,
-       display_content = excluded.display_content,
-       editable = excluded.editable,
-       width = excluded.width,
-       sortable = excluded.sortable,
-       data_type = excluded.data_type,
-       align = excluded.align`
-  ).run(
-    column.id,
-    column.pageId,
-    column.columnTitle,
-    column.fieldName ?? null,
-    column.displayContent,
-    column.editable ? 1 : 0,
-    column.width ?? null,
-    column.sortable ? 1 : 0,
-    column.dataType ?? null,
-    column.align ?? null
-  );
-}
-
-function insertButton(db: Database.Database, button: Button): void {
-  db.prepare(
-    `INSERT INTO buttons (id, page_id, button_name, scope, position, display_condition, disabled_condition, click_result, confirm_required)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       page_id = excluded.page_id,
-       button_name = excluded.button_name,
-       scope = excluded.scope,
-       position = excluded.position,
-       display_condition = excluded.display_condition,
-       disabled_condition = excluded.disabled_condition,
-       click_result = excluded.click_result,
-       confirm_required = excluded.confirm_required`
-  ).run(
-    button.id,
-    button.pageId,
-    button.buttonName,
-    button.scope,
-    button.position,
-    button.displayCondition || null,
-    button.disabledCondition || null,
-    button.clickResult,
-    button.confirmRequired ? 1 : 0
-  );
-}
-
-function insertAPI(db: Database.Database, api: API): void {
-  db.prepare(
-    `INSERT INTO apis (id, name, description)
-     VALUES (?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
+       type = excluded.type,
        name = excluded.name,
-       description = excluded.description`
-  ).run(api.id, api.name, api.description ?? null);
+       title = excluded.title,
+       summary = excluded.summary,
+       tags = excluded.tags,
+       meta = excluded.meta,
+       module = excluded.module,
+       docs_path = excluded.docs_path,
+       content_hash = excluded.content_hash`
+  ).run(
+    node.id,
+    node.type,
+    node.name,
+    node.title,
+    node.summary,
+    JSON.stringify(node.tags),
+    node.meta ? JSON.stringify(node.meta) : null,
+    node.module ?? null,
+    node.docsPath ?? null,
+    node.contentHash ?? null
+  );
 }
 
-function insertPageAPI(db: Database.Database, pageId: string, apiId: string): void {
-  db.prepare(
-    `INSERT INTO page_calls_apis (page_id, api_id)
-     VALUES (?, ?)
-     ON CONFLICT(page_id, api_id) DO NOTHING`
-  ).run(pageId, apiId);
+function listNodesByType(db: Database.Database, type: NodeType): GraphNode[] {
+  const rows = db.prepare('SELECT * FROM nodes WHERE type = ?').all(type) as NodeRow[];
+  return rows.map(rowToNode);
 }
 
-function insertFieldCallsAPI(db: Database.Database, fieldId: string, apiId: string): void {
-  db.prepare(
-    `INSERT INTO field_calls_apis (field_id, api_id)
-     VALUES (?, ?)
-     ON CONFLICT(field_id, api_id) DO NOTHING`
-  ).run(fieldId, apiId);
+function listAllNodes(db: Database.Database): GraphNode[] {
+  const rows = db.prepare('SELECT * FROM nodes').all() as NodeRow[];
+  return rows.map(rowToNode);
 }
 
-function deletePageEntities(db: Database.Database, pageId: string): void {
-  db.prepare('DELETE FROM field_calls_apis WHERE field_id IN (SELECT id FROM fields WHERE page_id = ?)').run(pageId);
-  db.prepare('DELETE FROM page_calls_apis WHERE page_id = ?').run(pageId);
-  db.prepare('DELETE FROM fields WHERE page_id = ?').run(pageId);
-  db.prepare('DELETE FROM grid_columns WHERE page_id = ?').run(pageId);
-  db.prepare('DELETE FROM buttons WHERE page_id = ?').run(pageId);
-}
-
-function deletePage(db: Database.Database, pageId: string): void {
-  deletePageEntities(db, pageId);
-  db.prepare('DELETE FROM pages WHERE id = ?').run(pageId);
-}
-
-function getPageHashes(db: Database.Database): Map<string, string> {
-  const rows = db.prepare('SELECT id, content_hash FROM pages').all() as Array<{ id: string; content_hash: string | null }>;
-  const map = new Map<string, string>();
-  for (const r of rows) {
-    if (r.content_hash) map.set(r.id, r.content_hash);
-  }
-  return map;
-}
-
-function getPageSpec(
-  db: Database.Database,
-  pageId: string
-): {
-  page: Page | null;
-  fields: Field[];
-  columns: GridColumn[];
-  buttons: Button[];
-  apis: API[];
-} {
-  const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(pageId) as PageRow | undefined;
-  const fields = db.prepare('SELECT * FROM fields WHERE page_id = ?').all(pageId) as FieldRow[];
-  const columns = db.prepare('SELECT * FROM grid_columns WHERE page_id = ?').all(pageId) as GridColumnRow[];
-  const buttons = db.prepare('SELECT * FROM buttons WHERE page_id = ?').all(pageId) as ButtonRow[];
-  const apis = db
-    .prepare(
-      `SELECT a.* FROM apis a
-       JOIN page_calls_apis pca ON a.id = pca.api_id
-       WHERE pca.page_id = ?`
-    )
-    .all(pageId) as APIRow[];
-
-  return {
-    page: page ? rowToPage(page) : null,
-    fields: fields.map(rowToField),
-    columns: columns.map(rowToGridColumn),
-    buttons: buttons.map(rowToButton),
-    apis: apis.map(rowToAPI),
-  };
-}
-
-function searchPages(db: Database.Database, keyword: string, module?: string): Page[] {
+function searchNodes(db: Database.Database, keyword: string): GraphNode[] {
   const like = `%${keyword}%`;
-  const sql = module
-    ? `SELECT * FROM pages WHERE module = ? AND (id LIKE ? OR page_name LIKE ? OR page_title LIKE ?)`
-    : `SELECT * FROM pages WHERE id LIKE ? OR page_name LIKE ? OR page_title LIKE ?`;
-
-  const stmt = db.prepare(sql);
-  const rows = module
-    ? (stmt.all(module, like, like, like) as PageRow[])
-    : (stmt.all(like, like, like) as PageRow[]);
-
-  return rows.map(rowToPage);
+  const rows = db
+    .prepare(`SELECT * FROM nodes WHERE id LIKE ? OR name LIKE ? OR title LIKE ?`)
+    .all(like, like, like) as NodeRow[];
+  return rows.map(rowToNode);
 }
+
+function getNodeById(db: Database.Database, nodeId: string): GraphNode | null {
+  const row = db.prepare('SELECT * FROM nodes WHERE id = ?').get(nodeId) as NodeRow | undefined;
+  return row ? rowToNode(row) : null;
+}
+
+function deleteNode(db: Database.Database, nodeId: string): void {
+  db.prepare('DELETE FROM edges WHERE source = ? OR target = ?').run(nodeId, nodeId);
+  db.prepare('DELETE FROM nodes WHERE id = ?').run(nodeId);
+}
+
+// ─── Edge operations ───
+
+function insertEdge(db: Database.Database, edge: GraphEdge): void {
+  db.prepare(
+    `INSERT INTO edges (source, target, type, description)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(source, target, type) DO UPDATE SET
+       description = excluded.description`
+  ).run(
+    edge.source,
+    edge.target,
+    edge.type,
+    edge.description ?? null
+  );
+}
+
+function listEdges(db: Database.Database): GraphEdge[] {
+  const rows = db.prepare('SELECT * FROM edges').all() as EdgeRow[];
+  return rows.map(rowToEdge);
+}
+
+function getEdgesFromSource(db: Database.Database, sourceId: string): GraphEdge[] {
+  const rows = db.prepare('SELECT * FROM edges WHERE source = ?').all(sourceId) as EdgeRow[];
+  return rows.map(rowToEdge);
+}
+
+function getEdgesToTarget(db: Database.Database, targetId: string): GraphEdge[] {
+  const rows = db.prepare('SELECT * FROM edges WHERE target = ?').all(targetId) as EdgeRow[];
+  return rows.map(rowToEdge);
+}
+
+function deleteEdgesForNode(db: Database.Database, nodeId: string): void {
+  db.prepare('DELETE FROM edges WHERE source = ? OR target = ?').run(nodeId, nodeId);
+}
+
+// ─── Project operations ───
 
 function clearProject(db: Database.Database): void {
-  db.exec('DELETE FROM page_calls_apis');
-  db.exec('DELETE FROM field_calls_apis');
-  db.exec('DELETE FROM fields');
-  db.exec('DELETE FROM grid_columns');
-  db.exec('DELETE FROM buttons');
-  db.exec('DELETE FROM apis');
-  db.exec('DELETE FROM pages');
+  db.exec('DELETE FROM edges');
+  db.exec('DELETE FROM nodes');
 }
 
 // ─── Row mappers ───
 
-interface PageRow {
+interface NodeRow {
   id: string;
-  module: string;
-  page_name: string;
-  page_title: string;
-  page_type: string | null;
-  route: string | null;
-  page_function: string | null;
+  type: string;
+  name: string;
+  title: string;
+  summary: string;
+  tags: string;
+  meta: string | null;
+  module: string | null;
+  docs_path: string | null;
   content_hash: string | null;
 }
 
-interface FieldRow {
-  id: string;
-  page_id: string;
-  field_label: string;
-  field_name: string;
-  component_type: string;
-  required: number;
-  default_value: string | null;
-}
-
-interface GridColumnRow {
-  id: string;
-  page_id: string;
-  column_title: string;
-  field_name: string | null;
-  display_content: string;
-  editable: number;
-  width: number | null;
-  sortable: number | null;
-  data_type: string | null;
-  align: string | null;
-}
-
-interface ButtonRow {
-  id: string;
-  page_id: string;
-  button_name: string;
-  scope: string;
-  position: string;
-  display_condition: string | null;
-  disabled_condition: string | null;
-  click_result: string;
-  confirm_required: number;
-}
-
-interface APIRow {
-  id: string;
-  name: string;
+interface EdgeRow {
+  source: string;
+  target: string;
+  type: string;
   description: string | null;
 }
 
-function rowToPage(r: PageRow): Page {
+function rowToNode(r: NodeRow): GraphNode {
   return {
     id: r.id,
-    module: r.module,
-    pageName: r.page_name,
-    pageTitle: r.page_title,
-    pageType: r.page_type ?? undefined,
-    route: r.route ?? undefined,
-    pageFunction: r.page_function ?? undefined,
-  };
-}
-
-function rowToField(r: FieldRow): Field {
-  return {
-    id: r.id,
-    pageId: r.page_id,
-    fieldLabel: r.field_label,
-    fieldName: r.field_name,
-    componentType: r.component_type,
-    required: r.required === 1,
-    defaultValue: r.default_value ?? undefined,
-  };
-}
-
-function rowToGridColumn(r: GridColumnRow): GridColumn {
-  return {
-    id: r.id,
-    pageId: r.page_id,
-    columnTitle: r.column_title,
-    fieldName: r.field_name ?? undefined,
-    displayContent: r.display_content,
-    editable: r.editable === 1,
-    width: r.width ?? undefined,
-    sortable: r.sortable === 1,
-    dataType: r.data_type ?? undefined,
-    align: (r.align as 'left' | 'center' | 'right') ?? undefined,
-  };
-}
-
-function rowToButton(r: ButtonRow): Button {
-  return {
-    id: r.id,
-    pageId: r.page_id,
-    buttonName: r.button_name,
-    scope: r.scope,
-    position: r.position,
-    displayCondition: r.display_condition ?? '',
-    disabledCondition: r.disabled_condition ?? '',
-    clickResult: r.click_result,
-    confirmRequired: r.confirm_required === 1,
-  };
-}
-
-function rowToAPI(r: APIRow): API {
-  return {
-    id: r.id,
+    type: r.type as NodeType,
     name: r.name,
+    title: r.title,
+    summary: r.summary,
+    tags: safeJsonParse(r.tags, []),
+    meta: safeJsonParse(r.meta, undefined),
+    module: r.module ?? undefined,
+    docsPath: r.docs_path ?? undefined,
+    contentHash: r.content_hash ?? undefined,
+  };
+}
+
+function rowToEdge(r: EdgeRow): GraphEdge {
+  return {
+    source: r.source,
+    target: r.target,
+    type: r.type as EdgeType,
     description: r.description ?? undefined,
   };
+}
+
+function safeJsonParse<T>(input: string | null, fallback: T): T {
+  if (!input) return fallback;
+  try {
+    return JSON.parse(input) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+// ─── Phase 1: FTS5 + Graph traversal helpers ───
+
+function checkFTS5Available(db: Database.Database): boolean {
+  try {
+    const result = db.prepare("SELECT sqlite_compileoption_used('ENABLE_FTS5') as enabled").get() as
+      | { enabled: number }
+      | undefined;
+    return result?.enabled === 1;
+  } catch {
+    return false;
+  }
+}
+
+function fallbackSearch(db: Database.Database, keyword: string): GraphNode[] {
+  const like = `%${keyword}%`;
+  const rows = db
+    .prepare(`SELECT * FROM nodes WHERE id LIKE ? OR name LIKE ? OR title LIKE ? OR summary LIKE ?`)
+    .all(like, like, like, like) as NodeRow[];
+  return rows.map(rowToNode);
+}
+
+const CJK_RE = /[一-鿿㐀-䶿]/;
+
+function searchNodesFTS(store: Store, keyword: string): GraphNode[] {
+  const db = getStoreDatabase(store);
+
+  // Sanitize keyword for FTS5 (escape quotes)
+  const sanitized = keyword.replace(/"/g, '""').trim();
+  if (!sanitized) return [];
+
+  if (!checkFTS5Available(db)) {
+    return fallbackSearch(db, keyword);
+  }
+
+  try {
+    // Try original query first
+    let rows = db
+      .prepare(
+        `SELECT n.* FROM nodes n
+         JOIN nodes_fts fts ON n.rowid = fts.rowid
+         WHERE nodes_fts MATCH ?
+         LIMIT 100`
+      )
+      .all(sanitized) as NodeRow[];
+
+    // If empty and keyword contains CJK, try single-char tokenization
+    // FTS5 simple tokenizer indexes CJK as single chars, so "支付" → "支 付"
+    if (rows.length === 0 && CJK_RE.test(sanitized)) {
+      const cjkQuery = sanitized.split('').join(' ');
+      rows = db
+        .prepare(
+          `SELECT n.* FROM nodes n
+           JOIN nodes_fts fts ON n.rowid = fts.rowid
+           WHERE nodes_fts MATCH ?
+           LIMIT 100`
+        )
+        .all(cjkQuery) as NodeRow[];
+    }
+
+    if (rows.length === 0) {
+      return fallbackSearch(db, keyword);
+    }
+    return rows.map(rowToNode);
+  } catch {
+    // FTS5 query syntax error → fallback to LIKE
+    return fallbackSearch(db, keyword);
+  }
+}
+
+function getCallGraph(
+  store: Store,
+  nodeId: string,
+  maxDepth: number = 2
+): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  const safeDepth = clamp(maxDepth, 1, 5);
+  const visitedNodes = new Set<string>();
+  const visitedEdges = new Set<string>();
+  const resultNodes: GraphNode[] = [];
+  const resultEdges: GraphEdge[] = [];
+
+  let queue: Array<{ id: string; depth: number }> = [{ id: nodeId, depth: 0 }];
+
+  while (queue.length > 0) {
+    const { id, depth } = queue.shift()!;
+    if (visitedNodes.has(id)) continue;
+    visitedNodes.add(id);
+
+    const node = store.getNodeById(id);
+    if (node) resultNodes.push(node);
+
+    if (depth >= safeDepth) continue;
+
+    // outgoing edges
+    const outEdges = store.getEdgesFromSource(id);
+    for (const e of outEdges) {
+      const edgeKey = `${e.source}-${e.target}-${e.type}`;
+      if (!visitedEdges.has(edgeKey)) {
+        visitedEdges.add(edgeKey);
+        resultEdges.push(e);
+      }
+      if (!visitedNodes.has(e.target)) {
+        queue.push({ id: e.target, depth: depth + 1 });
+      }
+    }
+
+    // incoming edges
+    const inEdges = store.getEdgesToTarget(id);
+    for (const e of inEdges) {
+      const edgeKey = `${e.source}-${e.target}-${e.type}`;
+      if (!visitedEdges.has(edgeKey)) {
+        visitedEdges.add(edgeKey);
+        resultEdges.push(e);
+      }
+      if (!visitedNodes.has(e.source)) {
+        queue.push({ id: e.source, depth: depth + 1 });
+      }
+    }
+  }
+
+  return { nodes: resultNodes, edges: resultEdges };
+}
+
+function findDeadApis(store: Store): GraphNode[] {
+  const apis = store.listNodesByType('api');
+  const allEdges = store.listEdges();
+  const referenced = new Set<string>();
+
+  for (const e of allEdges) {
+    if (e.target.startsWith('api:')) {
+      referenced.add(e.target);
+    }
+  }
+
+  return apis.filter((api) => !referenced.has(api.id));
+}
+
+function findOrphanFields(store: Store): GraphNode[] {
+  const fields = store.listNodesByType('field');
+  const allEdges = store.listEdges();
+  const contained = new Set<string>();
+
+  for (const e of allEdges) {
+    if (e.type === 'contains' && e.target.startsWith('field:')) {
+      contained.add(e.target);
+    }
+  }
+
+  return fields.filter((field) => !contained.has(field.id));
 }

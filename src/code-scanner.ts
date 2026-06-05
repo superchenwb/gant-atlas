@@ -471,7 +471,7 @@ export async function buildMapping(
   };
 
   // Get all pages from DB
-  const allSpecPages = store.searchPages('', undefined);
+  const allSpecPages = store.listNodesByType('page');
   const matchedSpecPageIds = new Set<string>();
   const matchedCodeDirs = new Set<string>();
 
@@ -492,7 +492,7 @@ export async function buildMapping(
     const moduleName = basename(join(componentPath, '..'));
     const pageId = `${moduleName}/${pageName}`;
 
-    const specPage = allSpecPages.find((p) => p.id === pageId);
+    const specPage = allSpecPages.find((p) => p.id === `page:${pageId}`);
     if (!specPage) {
       result.unmatchedCodePages.push({
         codeDir: componentPath,
@@ -508,82 +508,110 @@ export async function buildMapping(
     // Scan code for this page
     const codeInfo = await scanPageDir(componentPath, moduleName, pageName);
 
-    // Get spec info
-    const spec = store.getPageSpec(specPage.id);
+    // Get spec info from nodes/edges
+    const pageEdges = store.getEdgesFromSource(specPage.id);
+    const specFieldNames: string[] = [];
+    const specApiNames: string[] = [];
+
+    for (const edge of pageEdges) {
+      if (edge.type === 'contains') {
+        const node = store.getNodeById(edge.target);
+        if (node?.type === 'field') specFieldNames.push(node.name);
+      }
+      if (edge.type === 'calls') {
+        const node = store.getNodeById(edge.target);
+        if (node?.type === 'api') specApiNames.push(node.name);
+      }
+    }
+
+    // field -> api edges
+    for (const edge of pageEdges) {
+      if (edge.type === 'contains') {
+        const fieldEdges = store.getEdgesFromSource(edge.target);
+        for (const fe of fieldEdges) {
+          if (fe.type === 'calls') {
+            const apiNode = store.getNodeById(fe.target);
+            if (apiNode?.type === 'api') specApiNames.push(apiNode.name);
+          }
+        }
+      }
+    }
+
+    const uniqueSpecFieldNames = new Set(specFieldNames);
+    const uniqueSpecApiNames = new Set(specApiNames);
 
     // Match fields
-    const specFieldNames = new Set(spec.fields.map((f) => f.fieldName).filter(Boolean));
     const codeFieldNames = new Set(codeInfo.fields.map((f) => f.name));
     let matchedFields = 0;
     for (const cf of codeInfo.fields) {
-      if (specFieldNames.has(cf.name)) {
+      if (uniqueSpecFieldNames.has(cf.name)) {
         matchedFields++;
       } else {
         result.fieldMismatches.push({
-          pageId: specPage.id,
+          pageId: pageId,
           type: 'missing_in_doc',
           fieldName: cf.name,
           location: `${componentPath}/schema.ts`,
         });
       }
     }
-    for (const sf of spec.fields) {
-      if (sf.fieldName && !codeFieldNames.has(sf.fieldName)) {
+    for (const sf of uniqueSpecFieldNames) {
+      if (!codeFieldNames.has(sf)) {
         result.fieldMismatches.push({
-          pageId: specPage.id,
+          pageId: pageId,
           type: 'missing_in_code',
-          fieldName: sf.fieldName,
-          location: `${specPage.id}/search-area.md`,
+          fieldName: sf,
+          location: `${pageId}/search-area.md`,
         });
       }
     }
 
     // Match APIs
-    const specApiNames = new Set(spec.apis.map((a) => a.name));
     const codeApiNames = new Set(codeInfo.apis);
     let matchedApis = 0;
     for (const ca of codeInfo.apis) {
-      if (specApiNames.has(ca)) {
+      if (uniqueSpecApiNames.has(ca)) {
         matchedApis++;
       } else {
         result.apiMismatches.push({
-          pageId: specPage.id,
+          pageId: pageId,
           type: 'missing_in_doc',
           apiName: ca,
           location: `${componentPath}/services.ts`,
         });
       }
     }
-    for (const sa of spec.apis) {
-      if (!codeApiNames.has(sa.name)) {
+    for (const sa of uniqueSpecApiNames) {
+      if (!codeApiNames.has(sa)) {
         result.apiMismatches.push({
-          pageId: specPage.id,
+          pageId: pageId,
           type: 'missing_in_code',
-          apiName: sa.name,
-          location: `${specPage.id}/main.md`,
+          apiName: sa,
+          location: `${pageId}/main.md`,
         });
       }
     }
 
     result.matchedPages.push({
-      pageId: specPage.id,
+      pageId: pageId,
       codeDir: componentPath,
       route: route.path,
       matchedFields,
       totalCodeFields: codeInfo.fields.length,
-      totalSpecFields: spec.fields.length,
+      totalSpecFields: uniqueSpecFieldNames.size,
       matchedApis,
       totalCodeApis: codeInfo.apis.length,
-      totalSpecApis: spec.apis.length,
+      totalSpecApis: uniqueSpecApiNames.size,
     });
   }
 
   // Find unmatched spec pages
   for (const specPage of allSpecPages) {
+    const rawId = specPage.id.replace(/^page:/, '');
     if (!matchedSpecPageIds.has(specPage.id)) {
       result.unmatchedSpecPages.push({
-        pageId: specPage.id,
-        pageTitle: specPage.pageTitle,
+        pageId: rawId,
+        pageTitle: specPage.title,
         reason: '未找到对应的代码页面',
       });
     }
@@ -614,3 +642,152 @@ function resolveComponentPath(component: string, codeDir: string): string | null
 }
 
 export { resolveComponentPath };
+
+// ─── Phase 1: Component + Service scanning enhancements ───
+
+export interface ComponentInfo {
+  name: string;
+  filePath: string;
+  pageId?: string;
+}
+
+export interface ServiceInfo {
+  name: string;
+  filePath: string;
+  method?: string;
+  endpoint?: string;
+}
+
+/**
+ * 扫描代码目录中的 React/Vue 组件文件。
+ * 复用 regex + AST fallback 模式。
+ */
+export async function scanComponents(codeDir: string): Promise<ComponentInfo[]> {
+  const { readdirSync, statSync } = await import('fs');
+  const { join, relative, extname } = await import('path');
+
+  const components: ComponentInfo[] = [];
+  const seen = new Set<string>();
+
+  function walk(dir: string) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        // Skip common non-source directories
+        if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
+        walk(fullPath);
+      } else if (stat.isFile()) {
+        const ext = extname(entry);
+        if (ext === '.tsx' || ext === '.jsx' || ext === '.vue') {
+          const name = entry.replace(ext, '');
+          // Skip index files and test files
+          if (name === 'index' || name.endsWith('.test') || name.endsWith('.spec')) continue;
+          const relPath = relative(codeDir, fullPath);
+          if (!seen.has(relPath)) {
+            seen.add(relPath);
+            components.push({ name, filePath: relPath });
+          }
+        }
+      }
+    }
+  }
+
+  walk(codeDir);
+  return components;
+}
+
+/**
+ * 扫描 src/services/ 或 src/api/ 目录，提取 API 函数定义。
+ * 复用 regex + AST fallback 模式。
+ */
+export async function scanServicesDir(servicesDir: string): Promise<ServiceInfo[]> {
+  const { readdirSync, statSync } = await import('fs');
+  const { join, relative, extname } = await import('path');
+
+  const services: ServiceInfo[] = [];
+  const seen = new Set<string>();
+
+  function walk(dir: string) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        if (entry === 'node_modules' || entry === 'dist') continue;
+        walk(fullPath);
+      } else if (stat.isFile()) {
+        const ext = extname(entry);
+        if (ext === '.ts' || ext === '.js') {
+          try {
+            const apis = scanServicesFile(fullPath);
+            const relPath = relative(dir, fullPath);
+            for (const api of apis) {
+              if (!seen.has(api)) {
+                seen.add(api);
+                services.push({ name: api, filePath: relPath });
+              }
+            }
+          } catch {
+            // skip unreadable files
+          }
+        }
+      }
+    }
+  }
+
+  walk(servicesDir);
+
+  // AST fallback: if regex found nothing, try AST on each file
+  if (services.length === 0) {
+    try {
+      const entries = readdirSync(servicesDir);
+      for (const entry of entries) {
+        const fullPath = join(servicesDir, entry);
+        const stat = statSync(fullPath);
+        if (stat.isFile() && (extname(entry) === '.ts' || extname(entry) === '.js')) {
+          const raw = readFileSync(fullPath, 'utf-8');
+          const apis = await scanServicesAST(raw);
+          const relPath = relative(servicesDir, fullPath);
+          for (const api of apis) {
+            if (!seen.has(api)) {
+              seen.add(api);
+              services.push({ name: api, filePath: relPath });
+            }
+          }
+        }
+      }
+    } catch {
+      // directory may not exist
+    }
+  }
+
+  return services;
+}
+
+function scanServicesFile(filePath: string): string[] {
+  const raw = readFileSync(filePath, 'utf-8');
+  const apis: string[] = [];
+
+  const apiRegex = /(?:export\s+)?(?:const|function)\s+([a-z][a-zA-Z0-9]*Api)\s*(?:=|\()/g;
+
+  let m: RegExpExecArray | null;
+  while ((m = apiRegex.exec(raw)) !== null) {
+    if (!apis.includes(m[1])) apis.push(m[1]);
+  }
+
+  return apis;
+}

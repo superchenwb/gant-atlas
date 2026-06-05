@@ -16,34 +16,36 @@ describe('CLI validate command', () => {
 
   it('exits 0 when no issues found', () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'test/page',
+    store.insertNode({
+      id: 'page:test/page',
+      type: 'page',
+      name: 'page',
+      title: 'Test Page',
+      summary: '',
+      tags: ['list'],
       module: 'test',
-      pageName: 'page',
-      pageTitle: 'Test Page',
-      pageType: 'list',
-      route: '/test',
+      meta: { route: '/test', pageType: 'list' },
     });
-    store.insertField({
-      id: 'test/page/f1',
-      pageId: 'test/page',
-      fieldLabel: 'Name',
-      fieldName: 'name',
-      componentType: 'Input',
-      required: false,
+    store.insertNode({
+      id: 'field:test/page/f1',
+      type: 'field',
+      name: 'name',
+      title: 'Name',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: false },
     });
-    store.insertGridColumn({
-      id: 'test/page/c1',
-      pageId: 'test/page',
-      columnTitle: 'Name',
-      fieldName: 'name',
-      displayContent: '',
-      editable: false,
-      width: 100,
-      sortable: false,
-      dataType: 'string',
-      align: 'left',
+    store.insertNode({
+      id: 'column:test/page/c1',
+      type: 'column',
+      name: 'name',
+      title: 'Name',
+      summary: 'Name',
+      tags: [],
+      meta: { editable: false },
     });
+    store.insertEdge({ source: 'page:test/page', target: 'field:test/page/f1', type: 'contains' });
+    store.insertEdge({ source: 'page:test/page', target: 'column:test/page/c1', type: 'contains' });
     store.close();
 
     const output = execSync(`${tsx} ${CLI} validate --db ${dbPath}`, {
@@ -56,12 +58,14 @@ describe('CLI validate command', () => {
 
   it('exits 1 when issues are found', () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'test/page',
+    store.insertNode({
+      id: 'page:test/page',
+      type: 'page',
+      name: 'page',
+      title: 'Test Page',
+      summary: '',
+      tags: [],
       module: 'test',
-      pageName: 'page',
-      pageTitle: 'Test Page',
-      // missing pageType and route
     });
     store.close();
 
@@ -84,24 +88,28 @@ describe('CLI validate command', () => {
 
   it('includes mapping report when codeDir and routesFile are provided', () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'test-module/simple-page',
+    store.insertNode({
+      id: 'page:test-module/simple-page',
+      type: 'page',
+      name: 'simple-page',
+      title: 'Simple Page',
+      summary: '',
+      tags: ['list'],
       module: 'test-module',
-      pageName: 'simple-page',
-      pageTitle: 'Simple Page',
-      pageType: 'list',
-      route: '/test/page',
+      meta: { route: '/test/page', pageType: 'list' },
     });
-    store.insertField({
-      id: 'test-module/simple-page/f1',
-      pageId: 'test-module/simple-page',
-      fieldLabel: '用户名',
-      fieldName: 'userName',
-      componentType: 'Input',
-      required: true,
+    store.insertNode({
+      id: 'field:test-module/simple-page/f1',
+      type: 'field',
+      name: 'userName',
+      title: '用户名',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: true },
     });
-    store.insertAPI({ id: 'api/simplePageFindListApi', name: 'simplePageFindListApi' });
-    store.insertPageAPI('test-module/simple-page', 'api/simplePageFindListApi');
+    store.insertNode({ id: 'api:api/simplePageFindListApi', type: 'api', name: 'simplePageFindListApi', title: 'simplePageFindListApi', summary: '', tags: [] });
+    store.insertEdge({ source: 'page:test-module/simple-page', target: 'field:test-module/simple-page/f1', type: 'contains' });
+    store.insertEdge({ source: 'page:test-module/simple-page', target: 'api:api/simplePageFindListApi', type: 'calls' });
     store.close();
 
     const fixturesDir = join(process.cwd(), 'tests', 'fixtures');

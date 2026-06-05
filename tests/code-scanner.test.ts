@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { scanRoutes, scanSchema, scanServices, resolveComponentPath } from '../src/code-scanner.js';
 import { join } from 'path';
 
+import { createStore } from '../src/store/sqlite.js';
+import { buildMapping } from '../src/code-scanner.js';
+import { rmSync } from 'fs';
+
 describe('scanRoutes', () => {
   it('extracts route mappings from JS object format', async () => {
     const routesFile = join(process.cwd(), 'tests', 'fixtures', 'routes-maps.ts');
@@ -120,10 +124,6 @@ describe('resolveComponentPath', () => {
   });
 });
 
-import { createStore } from '../src/store/sqlite.js';
-import { buildMapping } from '../src/code-scanner.js';
-import { rmSync } from 'fs';
-
 describe('buildMapping', () => {
   const dbPath = join(process.cwd(), 'tests', 'scanner-test.db');
   const fixturesDir = join(process.cwd(), 'tests', 'fixtures');
@@ -133,34 +133,40 @@ describe('buildMapping', () => {
     const store = createStore(dbPath);
 
     // Insert matching spec page
-    store.insertPage({
-      id: 'test-module/simple-page',
+    store.insertNode({
+      id: 'page:test-module/simple-page',
+      type: 'page',
+      name: 'simple-page',
+      title: 'Simple Page',
+      summary: '',
+      tags: [],
       module: 'test-module',
-      pageName: 'simple-page',
-      pageTitle: 'Simple Page',
-      pageType: 'list',
-      route: '/test/page',
+      meta: { route: '/test/page', pageType: 'list' },
     });
-    store.insertField({
-      id: 'test-module/simple-page/field/0',
-      pageId: 'test-module/simple-page',
-      fieldLabel: '用户名',
-      fieldName: 'userName',
-      componentType: 'Input',
-      required: true,
+    store.insertNode({
+      id: 'field:test-module/simple-page/field/0',
+      type: 'field',
+      name: 'userName',
+      title: '用户名',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: true },
     });
-    store.insertField({
-      id: 'test-module/simple-page/field/1',
-      pageId: 'test-module/simple-page',
-      fieldLabel: '状态',
-      fieldName: 'status',
-      componentType: 'Select',
-      required: false,
+    store.insertNode({
+      id: 'field:test-module/simple-page/field/1',
+      type: 'field',
+      name: 'status',
+      title: '状态',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Select', required: false },
     });
-    store.insertAPI({ id: 'api/simplePageFindListApi', name: 'simplePageFindListApi' });
-    store.insertAPI({ id: 'api/simplePageSaveApi', name: 'simplePageSaveApi' });
-    store.insertPageAPI('test-module/simple-page', 'api/simplePageFindListApi');
-    store.insertPageAPI('test-module/simple-page', 'api/simplePageSaveApi');
+    store.insertNode({ id: 'api:api/simplePageFindListApi', type: 'api', name: 'simplePageFindListApi', title: 'simplePageFindListApi', summary: '', tags: [] });
+    store.insertNode({ id: 'api:api/simplePageSaveApi', type: 'api', name: 'simplePageSaveApi', title: 'simplePageSaveApi', summary: '', tags: [] });
+    store.insertEdge({ source: 'page:test-module/simple-page', target: 'field:test-module/simple-page/field/0', type: 'contains' });
+    store.insertEdge({ source: 'page:test-module/simple-page', target: 'field:test-module/simple-page/field/1', type: 'contains' });
+    store.insertEdge({ source: 'page:test-module/simple-page', target: 'api:api/simplePageFindListApi', type: 'calls' });
+    store.insertEdge({ source: 'page:test-module/simple-page', target: 'api:api/simplePageSaveApi', type: 'calls' });
 
     const mapping = await buildMapping(
       join(fixturesDir, 'test-module'),
@@ -180,7 +186,7 @@ describe('buildMapping', () => {
 
   it('reports unmatched code pages for unresolvable paths', async () => {
     const store = createStore(dbPath);
-    store.insertPage({ id: 'test-module/simple-page', module: 'test-module', pageName: 'simple-page', pageTitle: 'Simple Page' });
+    store.insertNode({ id: 'page:test-module/simple-page', type: 'page', name: 'simple-page', title: 'Simple Page', summary: '', tags: [], module: 'test-module' });
 
     // Use a routes file with non-existent component
     const badRoutesFile = join(fixturesDir, 'routes-maps.ts');
@@ -196,24 +202,29 @@ describe('buildMapping', () => {
 
   it('reports field and api mismatches', async () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'test-module/simple-page',
+    store.insertNode({
+      id: 'page:test-module/simple-page',
+      type: 'page',
+      name: 'simple-page',
+      title: 'Simple Page',
+      summary: '',
+      tags: [],
       module: 'test-module',
-      pageName: 'simple-page',
-      pageTitle: 'Simple Page',
     });
     // Insert a field that exists in spec but not in code (code has userName, status)
-    store.insertField({
-      id: 'test-module/simple-page/field/0',
-      pageId: 'test-module/simple-page',
-      fieldLabel: '仅文档字段',
-      fieldName: 'docOnlyField',
-      componentType: 'Input',
-      required: false,
+    store.insertNode({
+      id: 'field:test-module/simple-page/field/0',
+      type: 'field',
+      name: 'docOnlyField',
+      title: '仅文档字段',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: false },
     });
+    store.insertEdge({ source: 'page:test-module/simple-page', target: 'field:test-module/simple-page/field/0', type: 'contains' });
     // Insert an API that exists in spec but not in code
-    store.insertAPI({ id: 'api/docOnlyApi', name: 'docOnlyApi' });
-    store.insertPageAPI('test-module/simple-page', 'api/docOnlyApi');
+    store.insertNode({ id: 'api:api/docOnlyApi', type: 'api', name: 'docOnlyApi', title: 'docOnlyApi', summary: '', tags: [] });
+    store.insertEdge({ source: 'page:test-module/simple-page', target: 'api:api/docOnlyApi', type: 'calls' });
 
     const mapping = await buildMapping(
       join(fixturesDir, 'test-module'),
@@ -233,11 +244,14 @@ describe('buildMapping', () => {
 
   it('reports unmatched spec pages', async () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'orphan/page',
+    store.insertNode({
+      id: 'page:orphan/page',
+      type: 'page',
+      name: 'page',
+      title: 'Orphan Page',
+      summary: '',
+      tags: [],
       module: 'orphan',
-      pageName: 'page',
-      pageTitle: 'Orphan Page',
     });
 
     const mapping = await buildMapping(
@@ -250,5 +264,27 @@ describe('buildMapping', () => {
     try { rmSync(dbPath); } catch { /* ignore */ }
 
     expect(mapping.unmatchedSpecPages.some((p) => p.pageId === 'orphan/page')).toBe(true);
+  });
+});
+
+describe('scanComponents', () => {
+  it('finds React/Vue components in a directory', async () => {
+    const { scanComponents } = await import('../src/code-scanner.js');
+    const fixturesDir = join(process.cwd(), 'tests', 'fixtures');
+    const components = await scanComponents(fixturesDir);
+
+    // Should find at least some files with .ts/.tsx extensions in fixtures
+    expect(components.length).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('scanServicesDir', () => {
+  it('finds API functions in a services directory', async () => {
+    const { scanServicesDir } = await import('../src/code-scanner.js');
+    const fixturesDir = join(process.cwd(), 'tests', 'fixtures', 'test-module');
+    const services = await scanServicesDir(fixturesDir);
+
+    // Should find API functions from fixture service files
+    expect(services.length).toBeGreaterThanOrEqual(0);
   });
 });

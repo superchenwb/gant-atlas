@@ -23,7 +23,7 @@ describe('CLI ingest command', () => {
     });
 
     const store = createStore(dbPath);
-    const pages = store.searchPages('', undefined);
+    const pages = store.listNodesByType('page');
     store.close();
 
     expect(pages.length).toBeGreaterThanOrEqual(1);
@@ -54,22 +54,26 @@ describe('CLI query command', () => {
 
   it('returns page spec as JSON', () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'test/page',
+    store.insertNode({
+      id: 'page:test/page',
+      type: 'page',
+      name: 'page',
+      title: 'Query Test',
+      summary: '',
+      tags: [],
       module: 'test',
-      pageName: 'page',
-      pageTitle: 'Query Test',
-      pageType: 'list',
-      route: '/test',
+      meta: { route: '/test', pageType: 'list' },
     });
-    store.insertField({
-      id: 'test/page/f1',
-      pageId: 'test/page',
-      fieldLabel: 'Name',
-      fieldName: 'name',
-      componentType: 'Input',
-      required: false,
+    store.insertNode({
+      id: 'field:test/page/f1',
+      type: 'field',
+      name: 'name',
+      title: 'Name',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: false },
     });
+    store.insertEdge({ source: 'page:test/page', target: 'field:test/page/f1', type: 'contains' });
     store.close();
 
     const output = execSync(`${tsx} ${CLI} query page test/page --db ${dbPath}`, {
@@ -77,13 +81,13 @@ describe('CLI query command', () => {
     });
 
     const spec = JSON.parse(output);
-    expect(spec.page.pageTitle).toBe('Query Test');
-    expect(spec.fields).toHaveLength(1);
+    expect(spec.page.title).toBe('Query Test');
+    expect(spec.nodes.length).toBe(1);
   });
 
   it('exits 1 for missing page', () => {
     const store = createStore(dbPath);
-    store.insertPage({ id: 'test/page', module: 'test', pageName: 'page', pageTitle: 'Test' });
+    store.insertNode({ id: 'page:test/page', type: 'page', name: 'page', title: 'Test', summary: '', tags: [], module: 'test' });
     store.close();
 
     let exitCode: number | null = null;
@@ -109,13 +113,15 @@ describe('CLI map command', () => {
 
   it('outputs mapping between code and spec', () => {
     const store = createStore(dbPath);
-    store.insertPage({
-      id: 'test-module/simple-page',
+    store.insertNode({
+      id: 'page:test-module/simple-page',
+      type: 'page',
+      name: 'simple-page',
+      title: 'Simple Page',
+      summary: '',
+      tags: [],
       module: 'test-module',
-      pageName: 'simple-page',
-      pageTitle: 'Simple Page',
-      pageType: 'list',
-      route: '/test/page',
+      meta: { route: '/test/page', pageType: 'list' },
     });
     store.close();
 
