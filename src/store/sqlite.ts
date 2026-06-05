@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type { GraphNode, GraphEdge, NodeType, EdgeType } from '../types/graph.js';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export interface Migration {
   version: number;
@@ -37,8 +37,13 @@ export interface Store {
   deleteNode(nodeId: string): void;
   deleteEdgesForNode(nodeId: string): void;
   getNodeById(nodeId: string): GraphNode | null;
+  getNodesByIds(nodeIds: string[]): GraphNode[];
   getEdgesFromSource(sourceId: string): GraphEdge[];
   getEdgesToTarget(targetId: string): GraphEdge[];
+
+  // ─── Phase 2: stale marking ───
+  markNodeStale(nodeId: string, stale: boolean): void;
+  getStalePages(): GraphNode[];
 
   // ─── Phase 1 新增接口 ───
   searchNodesFTS(keyword: string): GraphNode[];
@@ -151,6 +156,18 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 3,
+    name: 'add_stale_flag',
+    up(db) {
+      db.exec(`ALTER TABLE nodes ADD COLUMN stale INTEGER NOT NULL DEFAULT 0`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_nodes_stale ON nodes(stale)`);
+    },
+    down(db) {
+      db.exec(`DROP INDEX IF EXISTS idx_nodes_stale`);
+      // SQLite doesn't support DROP COLUMN; downgrade requires table rebuild
+    },
+  },
 ];
 
 export function migrate(
@@ -204,6 +221,7 @@ export function createStore(dbPath: string): Store {
     deleteNode: (nodeId) => deleteNode(db, nodeId),
     deleteEdgesForNode: (nodeId) => deleteEdgesForNode(db, nodeId),
     getNodeById: (nodeId) => getNodeById(db, nodeId),
+    getNodesByIds: (nodeIds) => getNodesByIds(db, nodeIds),
     getEdgesFromSource: (sourceId) => getEdgesFromSource(db, sourceId),
     getEdgesToTarget: (targetId) => getEdgesToTarget(db, targetId),
     // Phase 1 new methods
@@ -212,6 +230,8 @@ export function createStore(dbPath: string): Store {
     findDeadApis: () => findDeadApis(store),
     findOrphanFields: () => findOrphanFields(store),
     isFTS5Available: () => checkFTS5Available(db),
+    markNodeStale: (nodeId, stale) => markNodeStale(db, nodeId, stale),
+    getStalePages: () => getStalePages(db),
     clearProject: () => clearProject(db),
     close: () => db.close(),
   };
@@ -225,8 +245,8 @@ export function createStore(dbPath: string): Store {
 
 function insertNode(db: Database.Database, node: GraphNode): void {
   db.prepare(
-    `INSERT INTO nodes (id, type, name, title, summary, tags, meta, module, docs_path, content_hash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO nodes (id, type, name, title, summary, tags, meta, module, docs_path, content_hash, stale)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        type = excluded.type,
        name = excluded.name,
@@ -236,7 +256,8 @@ function insertNode(db: Database.Database, node: GraphNode): void {
        meta = excluded.meta,
        module = excluded.module,
        docs_path = excluded.docs_path,
-       content_hash = excluded.content_hash`
+       content_hash = excluded.content_hash,
+       stale = excluded.stale`
   ).run(
     node.id,
     node.type,
@@ -247,7 +268,8 @@ function insertNode(db: Database.Database, node: GraphNode): void {
     node.meta ? JSON.stringify(node.meta) : null,
     node.module ?? null,
     node.docsPath ?? null,
-    node.contentHash ?? null
+    node.contentHash ?? null,
+    (node as GraphNode & { stale?: boolean }).stale ? 1 : 0
   );
 }
 
@@ -274,9 +296,25 @@ function getNodeById(db: Database.Database, nodeId: string): GraphNode | null {
   return row ? rowToNode(row) : null;
 }
 
+function getNodesByIds(db: Database.Database, nodeIds: string[]): GraphNode[] {
+  if (nodeIds.length === 0) return [];
+  const placeholders = nodeIds.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM nodes WHERE id IN (${placeholders})`).all(...nodeIds) as NodeRow[];
+  return rows.map(rowToNode);
+}
+
 function deleteNode(db: Database.Database, nodeId: string): void {
   db.prepare('DELETE FROM edges WHERE source = ? OR target = ?').run(nodeId, nodeId);
   db.prepare('DELETE FROM nodes WHERE id = ?').run(nodeId);
+}
+
+function markNodeStale(db: Database.Database, nodeId: string, stale: boolean): void {
+  db.prepare('UPDATE nodes SET stale = ? WHERE id = ?').run(stale ? 1 : 0, nodeId);
+}
+
+function getStalePages(db: Database.Database): GraphNode[] {
+  const rows = db.prepare("SELECT * FROM nodes WHERE type = 'page' AND stale = 1").all() as NodeRow[];
+  return rows.map(rowToNode);
 }
 
 // ─── Edge operations ───
@@ -334,6 +372,7 @@ interface NodeRow {
   module: string | null;
   docs_path: string | null;
   content_hash: string | null;
+  stale: number;
 }
 
 interface EdgeRow {
@@ -344,7 +383,7 @@ interface EdgeRow {
 }
 
 function rowToNode(r: NodeRow): GraphNode {
-  return {
+  const node: GraphNode = {
     id: r.id,
     type: r.type as NodeType,
     name: r.name,
@@ -356,6 +395,11 @@ function rowToNode(r: NodeRow): GraphNode {
     docsPath: r.docs_path ?? undefined,
     contentHash: r.content_hash ?? undefined,
   };
+  // Attach stale flag as a runtime property (not part of GraphNode interface)
+  if (r.stale === 1) {
+    (node as GraphNode & { stale?: boolean }).stale = true;
+  }
+  return node;
 }
 
 function rowToEdge(r: EdgeRow): GraphEdge {

@@ -61,7 +61,7 @@ describe('createServer', () => {
     });
 
     const text = (result.content as Array<{ text: string }>)[0].text;
-    const parsed = JSON.parse(text);
+    const parsed = JSON.parse(text).data;
     expect(parsed.page.title).toBe('Page');
   });
 
@@ -109,7 +109,7 @@ describe('createServer', () => {
     });
 
     const text = (result.content as Array<{ text: string }>)[0].text;
-    const parsed = JSON.parse(text);
+    const parsed = JSON.parse(text).data;
     expect(parsed).toEqual([{ id: 'p1', name: 'P1' }]);
   });
 

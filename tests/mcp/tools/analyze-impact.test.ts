@@ -53,7 +53,7 @@ describe('handleAnalyzeImpact', () => {
   describe('apiName branch', () => {
     it('returns affected pages and fields for an API', async () => {
       const result = await handleAnalyzeImpact(store, { apiName: 'findListApi' });
-      const data = JSON.parse(result.content[0].text as string);
+      const data = JSON.parse(result.content[0].text as string).data;
 
       expect(data.target).toBe('findListApi');
       expect(data.targetType).toBe('api');
@@ -69,6 +69,8 @@ describe('handleAnalyzeImpact', () => {
       const result = await handleAnalyzeImpact(store, { apiName: 'unknownApi' });
       const data = JSON.parse(result.content[0].text as string);
 
+
+
       expect(data.error).toBeDefined();
       expect(data.error.code).toBe('not_found');
       expect((result as any).isError).toBe(true);
@@ -78,7 +80,7 @@ describe('handleAnalyzeImpact', () => {
   describe('fieldName branch', () => {
     it('returns affected pages and fields for a field name', async () => {
       const result = await handleAnalyzeImpact(store, { fieldName: 'name' });
-      const data = JSON.parse(result.content[0].text as string);
+      const data = JSON.parse(result.content[0].text as string).data;
 
       expect(data.target).toBe('name');
       expect(data.targetType).toBe('field');
@@ -91,6 +93,8 @@ describe('handleAnalyzeImpact', () => {
       const result = await handleAnalyzeImpact(store, { fieldName: 'unknownField' });
       const data = JSON.parse(result.content[0].text as string);
 
+
+
       expect(data.error).toBeDefined();
       expect(data.error.code).toBe('not_found');
       expect((result as any).isError).toBe(true);
@@ -100,7 +104,7 @@ describe('handleAnalyzeImpact', () => {
   describe('pageId branch', () => {
     it('returns page spec and related pages for an existing page', async () => {
       const result = await handleAnalyzeImpact(store, { pageId: 'mod/page-a' });
-      const data = JSON.parse(result.content[0].text as string);
+      const data = JSON.parse(result.content[0].text as string).data;
 
       expect(data.target).toBe('mod/page-a');
       expect(data.targetType).toBe('page');
@@ -115,6 +119,8 @@ describe('handleAnalyzeImpact', () => {
       const result = await handleAnalyzeImpact(store, { pageId: 'mod/nonexistent' });
       const data = JSON.parse(result.content[0].text as string);
 
+
+
       expect(data.error).toBeDefined();
       expect(data.error.code).toBe('not_found');
       expect((result as any).isError).toBe(true);
@@ -122,7 +128,7 @@ describe('handleAnalyzeImpact', () => {
 
     it('returns related pages from both page_calls_apis and field_calls_apis', async () => {
       const result = await handleAnalyzeImpact(store, { pageId: 'mod/page-a' });
-      const data = JSON.parse(result.content[0].text as string);
+      const data = JSON.parse(result.content[0].text as string).data;
 
       // Should find page-b because both share findListApi
       expect(data.relatedPages.length).toBe(1);
@@ -134,6 +140,8 @@ describe('handleAnalyzeImpact', () => {
       const result = await handleAnalyzeImpact(store, {});
       const data = JSON.parse(result.content[0].text as string);
 
+
+
       expect(data.error).toBeDefined();
       expect(data.error.code).toBe('invalid_input');
       expect((result as any).isError).toBe(true);
@@ -143,21 +151,21 @@ describe('handleAnalyzeImpact', () => {
   describe('maxDepth parameter', () => {
     it('respects maxDepth for page impact analysis', async () => {
       const resultDepth1 = await handleAnalyzeImpact(store, { pageId: 'mod/page-a', maxDepth: 1 });
-      const data1 = JSON.parse(resultDepth1.content[0].text as string);
+      const data1 = JSON.parse(resultDepth1.content[0].text as string).data;
 
       const resultDepth3 = await handleAnalyzeImpact(store, { pageId: 'mod/page-a', maxDepth: 3 });
-      const data3 = JSON.parse(resultDepth3.content[0].text as string);
+      const data3 = JSON.parse(resultDepth3.content[0].text as string).data;
 
       expect(data3.nodes.length).toBeGreaterThanOrEqual(data1.nodes.length);
     });
 
     it('clamps maxDepth to [1, 5]', async () => {
       const resultLow = await handleAnalyzeImpact(store, { apiName: 'findListApi', maxDepth: 0 });
-      const dataLow = JSON.parse(resultLow.content[0].text as string);
+      const dataLow = JSON.parse(resultLow.content[0].text as string).data;
       expect(dataLow.riskLevel).toBeDefined();
 
       const resultHigh = await handleAnalyzeImpact(store, { apiName: 'findListApi', maxDepth: 10 });
-      const dataHigh = JSON.parse(resultHigh.content[0].text as string);
+      const dataHigh = JSON.parse(resultHigh.content[0].text as string).data;
       expect(dataHigh.riskLevel).toBeDefined();
     });
   });
@@ -165,14 +173,14 @@ describe('handleAnalyzeImpact', () => {
   describe('risk level', () => {
     it('returns riskLevel in response', async () => {
       const result = await handleAnalyzeImpact(store, { apiName: 'findListApi' });
-      const data = JSON.parse(result.content[0].text as string);
+      const data = JSON.parse(result.content[0].text as string).data;
       expect(data.riskLevel).toBeDefined();
       expect(['LOW', 'MEDIUM', 'HIGH']).toContain(data.riskLevel);
     });
 
     it('returns LOW for minimal impact', async () => {
       const result = await handleAnalyzeImpact(store, { apiName: 'deleteApi' });
-      const data = JSON.parse(result.content[0].text as string);
+      const data = JSON.parse(result.content[0].text as string).data;
       expect(data.riskLevel).toBe('LOW');
     });
   });

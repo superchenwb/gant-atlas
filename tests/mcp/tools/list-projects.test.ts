@@ -11,7 +11,7 @@ describe('handleListProjects', () => {
     const result = await handleListProjects(projects);
     expect(result.content).toHaveLength(1);
 
-    const parsed = JSON.parse(result.content[0].text as string);
+    const parsed = JSON.parse(result.content[0].text as string).data;
     expect(parsed).toEqual([
       { id: 'p1', name: 'Project A' },
       { id: 'p2', name: 'Project B' },
@@ -20,7 +20,7 @@ describe('handleListProjects', () => {
 
   it('returns empty array for no projects', async () => {
     const result = await handleListProjects([]);
-    const parsed = JSON.parse(result.content[0].text as string);
+    const parsed = JSON.parse(result.content[0].text as string).data;
     expect(parsed).toEqual([]);
   });
 });

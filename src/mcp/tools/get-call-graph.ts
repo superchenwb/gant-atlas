@@ -1,7 +1,15 @@
 import type { Store } from '../../store/sqlite.js';
 import { clamp } from '../../store/sqlite.js';
 import type { GraphNode, GraphEdge } from '../../types/graph.js';
-import { formatToolError } from './error.js';
+import { z } from 'zod';
+import { formatToolError, formatToolResult, validateToolArgs } from './error.js';
+
+const GetCallGraphSchema = z.object({
+  projectId: z.string().min(1),
+  nodeId: z.string().min(1),
+  direction: z.enum(['upstream', 'downstream', 'both']).optional(),
+  maxDepth: z.number().int().optional(),
+});
 
 /**
  * 给定 API 或页面，返回完整的调用链（上游调用者 + 下游被调用者）。
@@ -11,20 +19,11 @@ import { formatToolError } from './error.js';
  * AFTER THIS: 使用 analyze_impact 评估变更对上下游的影响范围。
  */
 export async function handleGetCallGraph(store: Store, args: unknown) {
-  const { projectId, nodeId, direction, maxDepth } = args as {
-    projectId: string;
-    nodeId: string;
-    direction?: 'upstream' | 'downstream' | 'both';
-    maxDepth?: number;
-  };
-
-  // ─── Input validation ───
-  if (!projectId || typeof projectId !== 'string') {
-    return formatToolError({ code: 'invalid_input', message: 'projectId 是必填字符串' });
+  const validation = validateToolArgs(GetCallGraphSchema, args);
+  if (!validation.ok) {
+    return formatToolError(validation.error);
   }
-  if (!nodeId || typeof nodeId !== 'string' || nodeId.trim().length === 0) {
-    return formatToolError({ code: 'invalid_input', message: 'nodeId 不能为空字符串' });
-  }
+  const { nodeId, direction, maxDepth } = validation.data;
 
   const safeDirection = direction ?? 'both';
   if (!['upstream', 'downstream', 'both'].includes(safeDirection)) {
@@ -94,23 +93,15 @@ export async function handleGetCallGraph(store: Store, args: unknown) {
     }
   }
 
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(
-          {
-            startNode: startNode.id,
-            direction: safeDirection,
-            maxDepth: safeMaxDepth,
-            nodes: resultNodes,
-            edges: resultEdges,
-            summary: `节点 "${startNode.id}" 的 ${safeDirection} 调用链：${resultNodes.length} 个节点，${resultEdges.length} 条关系（深度 ${safeMaxDepth}）`,
-          },
-          null,
-          2
-        ),
-      },
-    ],
-  };
+  return formatToolResult(
+    {
+      startNode: startNode.id,
+      direction: safeDirection,
+      maxDepth: safeMaxDepth,
+      nodes: resultNodes,
+      edges: resultEdges,
+      summary: `节点 "${startNode.id}" 的 ${safeDirection} 调用链：${resultNodes.length} 个节点，${resultEdges.length} 条关系（深度 ${safeMaxDepth}）`,
+    },
+    { count: resultNodes.length }
+  );
 }

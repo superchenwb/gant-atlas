@@ -22,7 +22,7 @@ describe('handleGetPageSpec', () => {
 
   it('returns page spec when found', async () => {
     const result = await handleGetPageSpec(store, { pageId: 'mod/page' });
-    const parsed = JSON.parse(result.content[0].text as string);
+    const parsed = JSON.parse(result.content[0].text as string).data;
     expect(parsed.page.title).toBe('Page');
     expect(parsed.relatedNodes.length).toBe(1);
   });

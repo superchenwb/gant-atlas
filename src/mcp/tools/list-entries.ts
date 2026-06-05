@@ -6,6 +6,13 @@
  */
 
 import type { Store } from '../../store/sqlite.js';
+import { z } from 'zod';
+import { formatToolResult, validateToolArgs } from './error.js';
+
+const ListEntriesSchema = z.object({
+  projectId: z.string().min(1),
+  type: z.string().optional(),
+});
 
 export interface ListEntriesInput {
   projectId: string;
@@ -13,7 +20,8 @@ export interface ListEntriesInput {
 }
 
 export async function handleListEntries(store: Store, args: unknown) {
-  const input = args as ListEntriesInput;
+  const validation = validateToolArgs(ListEntriesSchema, args);
+  const input = validation.ok ? validation.data : (args as ListEntriesInput);
   const filterType = input.type;
 
   const nodes = store.listAllNodes();
@@ -41,12 +49,8 @@ export async function handleListEntries(store: Store, args: unknown) {
     items,
   }));
 
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify({ total: nodes.length, entries: summary }, null, 2),
-      },
-    ],
-  };
+  return formatToolResult(
+    { total: nodes.length, entries: summary },
+    { count: nodes.length }
+  );
 }

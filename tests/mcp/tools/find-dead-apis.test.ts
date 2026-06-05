@@ -34,7 +34,7 @@ describe('handleFindDeadApis', () => {
 
   it('finds dead APIs with no incoming edges', async () => {
     const result = await handleFindDeadApis(store, { projectId: 'p1' });
-    const data = JSON.parse(result.content[0].text as string);
+    const data = JSON.parse(result.content[0].text as string).data;
 
     expect(data.deadApis.length).toBe(1);
     expect(data.deadApis[0].name).toBe('deadApi');
@@ -42,7 +42,7 @@ describe('handleFindDeadApis', () => {
 
   it('finds orphan fields with no containing page', async () => {
     const result = await handleFindDeadApis(store, { projectId: 'p1' });
-    const data = JSON.parse(result.content[0].text as string);
+    const data = JSON.parse(result.content[0].text as string).data;
 
     expect(data.orphanFields.length).toBe(1);
     expect(data.orphanFields[0].name).toBe('orphanField');
@@ -50,7 +50,7 @@ describe('handleFindDeadApis', () => {
 
   it('returns summary count', async () => {
     const result = await handleFindDeadApis(store, { projectId: 'p1' });
-    const data = JSON.parse(result.content[0].text as string);
+    const data = JSON.parse(result.content[0].text as string).data;
 
     expect(data.summary).toContain('1 个死 API');
     expect(data.summary).toContain('1 个孤儿字段');

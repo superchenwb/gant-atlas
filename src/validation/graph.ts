@@ -8,6 +8,7 @@
  */
 
 import type { GraphNode, GraphEdge, NodeType, EdgeType } from '../types/graph.js';
+import { validateNodeMeta } from '../types/graph.js';
 
 export interface ValidationIssue {
   /** 问题级别 */
@@ -188,6 +189,17 @@ function validateNode(node: GraphNode): ValidateNodeResult {
       nodeId: node.id,
     });
     node = { ...node, tags: [] };
+  }
+
+  // 规则 5: meta 字段类型校验（Zod schema）
+  const metaResult = validateNodeMeta(node);
+  if (!metaResult.valid) {
+    issues.push({
+      level: 'warn',
+      message: `meta 字段校验失败: ${metaResult.issues.join('; ')}`,
+      nodeId: node.id,
+    });
+    // 保留原始 meta，不阻止节点入库；仅记录警告
   }
 
   return { valid: true, node, issues };

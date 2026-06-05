@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { join } from 'path';
 import { serve } from './mcp/server.js';
-import { runIngest, runQueryPage, runMap, runValidate, runGenerate, runManifest } from './cli/actions.js';
+import { runIngest, runQueryPage, runMap, runValidate, runGenerate, runManifest, runStatus } from './cli/actions.js';
 import { setupCommand } from './cli/setup.js';
 
 const program = new Command();
@@ -138,6 +138,23 @@ program
       console.error(`[gant-atlas] 清单已导出: ${options.output}`);
     } else {
       console.log(out);
+    }
+  });
+
+program
+  .command('status')
+  .description('显示过期页面列表（stale pages）')
+  .requiredOption('--db <path>', 'SQLite 数据库文件路径')
+  .action((options: { db: string }) => {
+    const result = runStatus(options.db);
+    if (result.stalePages.length === 0) {
+      console.log(`所有 ${result.totalPages} 个页面均为最新状态 ✅`);
+    } else {
+      console.error(`[gant-atlas] 发现 ${result.stalePages.length}/${result.totalPages} 个过期页面：`);
+      for (const p of result.stalePages) {
+        console.log(`  ❌ ${p.id.replace(/^page:/, '')} — ${p.title}`);
+      }
+      process.exit(1);
     }
   });
 

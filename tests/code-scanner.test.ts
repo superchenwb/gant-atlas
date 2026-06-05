@@ -17,6 +17,17 @@ describe('scanRoutes', () => {
       ])
     );
   });
+
+  it('falls back to AST when regex fails (property reordering)', async () => {
+    const routesFile = join(process.cwd(), 'tests', 'fixtures', 'routes-ast-fallback.ts');
+    const routes = await scanRoutes(routesFile);
+    expect(routes.length).toBe(1);
+    expect(routes[0]).toEqual({
+      path: '/ast-page',
+      component: '@ast-page',
+      title: 'AST Page',
+    });
+  });
 });
 
 describe('scanSchema', () => {

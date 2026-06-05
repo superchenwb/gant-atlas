@@ -405,3 +405,13 @@ export async function runGenerate(options: {
 
   return { generated, skipped };
 }
+
+// ─── Status: show stale pages ───
+
+export function runStatus(dbPath: string): { stalePages: GraphNode[]; totalPages: number } {
+  const store = createStore(dbPath);
+  const stalePages = store.getStalePages();
+  const totalPages = store.listNodesByType('page').length;
+  store.close();
+  return { stalePages, totalPages };
+}

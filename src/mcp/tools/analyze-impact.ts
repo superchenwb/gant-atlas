@@ -1,7 +1,15 @@
 import type { Store } from '../../store/sqlite.js';
 import { clamp } from '../../store/sqlite.js';
 import type { GraphNode, GraphEdge } from '../../types/graph.js';
-import { formatToolError, formatToolResult } from './error.js';
+import { z } from 'zod';
+import { formatToolError, formatToolResult, validateToolArgs } from './error.js';
+
+const AnalyzeImpactSchema = z.object({
+  apiName: z.string().optional(),
+  fieldName: z.string().optional(),
+  pageId: z.string().optional(),
+  maxDepth: z.number().int().optional(),
+});
 
 /**
  * 分析修改某个接口/字段会影响哪些页面。
@@ -11,12 +19,11 @@ import { formatToolError, formatToolResult } from './error.js';
  * AFTER THIS: 使用 get_call_graph 查看完整的上下游调用链。
  */
 export async function handleAnalyzeImpact(store: Store, args: unknown) {
-  const { apiName, fieldName, pageId, maxDepth } = args as {
-    apiName?: string;
-    fieldName?: string;
-    pageId?: string;
-    maxDepth?: number;
-  };
+  const validation = validateToolArgs(AnalyzeImpactSchema, args);
+  if (!validation.ok) {
+    return formatToolError(validation.error);
+  }
+  const { apiName, fieldName, pageId, maxDepth } = validation.data;
 
   const safeMaxDepth = clamp(maxDepth ?? 3, 1, 5);
 

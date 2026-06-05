@@ -1,7 +1,16 @@
 import type { Store } from '../../store/sqlite.js';
 import { validateInputLength } from '../../store/sqlite.js';
 import type { GraphNode, GraphEdge } from '../../types/graph.js';
-import { formatToolError } from './error.js';
+import { z } from 'zod';
+import { formatToolError, validateToolArgs } from './error.js';
+
+const ExploreContextSchema = z.object({
+  projectId: z.string().min(1),
+  query: z.string().min(1),
+  taskContext: z.string().optional(),
+  maxNodes: z.number().int().optional(),
+  includeCode: z.boolean().optional(),
+});
 
 /**
  * 根据自然语言查询探索业务上下文，返回最相关的页面、字段、API 及其关系。
@@ -12,21 +21,12 @@ import { formatToolError } from './error.js';
  * 或使用 analyze_impact 评估变更影响。
  */
 export async function handleExploreContext(store: Store, args: unknown) {
-  const { projectId, query, taskContext, maxNodes, includeCode } = args as {
-    projectId: string;
-    query: string;
-    taskContext?: string;
-    maxNodes?: number;
-    includeCode?: boolean;
-  };
+  const validation = validateToolArgs(ExploreContextSchema, args);
+  if (!validation.ok) {
+    return formatToolError(validation.error);
+  }
+  const { query, taskContext, maxNodes, includeCode } = validation.data;
 
-  // ─── Input validation ───
-  if (!projectId || typeof projectId !== 'string') {
-    return formatToolError({ code: 'invalid_input', message: 'projectId 是必填字符串' });
-  }
-  if (!query || typeof query !== 'string' || query.trim().length === 0) {
-    return formatToolError({ code: 'invalid_input', message: 'query 不能为空字符串' });
-  }
   const lengthErr = (validateInputLength as (input: string) => string | null)(query);
   if (lengthErr) {
     return formatToolError({ code: 'too_large', message: lengthErr });

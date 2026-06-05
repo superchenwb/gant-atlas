@@ -30,7 +30,7 @@ describe('handleGetCallGraph', () => {
 
   it('returns both upstream and downstream by default', async () => {
     const result = await handleGetCallGraph(store, { projectId: 'p1', nodeId: 'api:payCallback' });
-    const data = JSON.parse(result.content[0].text as string);
+    const data = JSON.parse(result.content[0].text as string).data;
 
     expect(data.direction).toBe('both');
     expect(data.nodes.length).toBeGreaterThanOrEqual(3);
@@ -39,7 +39,7 @@ describe('handleGetCallGraph', () => {
 
   it('returns only upstream when specified', async () => {
     const result = await handleGetCallGraph(store, { projectId: 'p1', nodeId: 'api:payCallback', direction: 'upstream' });
-    const data = JSON.parse(result.content[0].text as string);
+    const data = JSON.parse(result.content[0].text as string).data;
 
     expect(data.direction).toBe('upstream');
     expect(data.nodes.some((n: { id: string }) => n.id === 'page:order/payment')).toBe(true);
@@ -48,7 +48,7 @@ describe('handleGetCallGraph', () => {
 
   it('returns only downstream when specified', async () => {
     const result = await handleGetCallGraph(store, { projectId: 'p1', nodeId: 'api:payCallback', direction: 'downstream' });
-    const data = JSON.parse(result.content[0].text as string);
+    const data = JSON.parse(result.content[0].text as string).data;
 
     expect(data.direction).toBe('downstream');
     expect(data.nodes.some((n: { id: string }) => n.id === 'api:notify')).toBe(true);
@@ -57,7 +57,7 @@ describe('handleGetCallGraph', () => {
 
   it('respects maxDepth', async () => {
     const result = await handleGetCallGraph(store, { projectId: 'p1', nodeId: 'page:order/payment', maxDepth: 1 });
-    const data = JSON.parse(result.content[0].text as string);
+    const data = JSON.parse(result.content[0].text as string).data;
 
     expect(data.maxDepth).toBe(1);
     // At depth 1 from payment page, we should see createOrder and payCallback

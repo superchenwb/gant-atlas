@@ -130,7 +130,7 @@ describe('handleCheckConsistency', () => {
   });
 
   function parseResult(result: Awaited<ReturnType<typeof handleCheckConsistency>>) {
-    return JSON.parse(result.content[0].text as string);
+    return JSON.parse(result.content[0].text as string).data;
   }
 
   it('detects incomplete pages (missing page_type or route)', async () => {

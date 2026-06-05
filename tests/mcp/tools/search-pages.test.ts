@@ -23,20 +23,20 @@ describe('handleSearchPages', () => {
 
   it('searches pages by keyword', async () => {
     const result = await handleSearchPages(store, { projectId: 'p1', keyword: 'Alpha' });
-    const parsed = JSON.parse(result.content[0].text as string);
+    const parsed = JSON.parse(result.content[0].text as string).data;
     expect(parsed.total).toBeGreaterThanOrEqual(1);
     expect(parsed.results.some((r: { title: string }) => r.title === 'Alpha')).toBe(true);
   });
 
   it('filters by module when provided', async () => {
     const result = await handleSearchPages(store, { projectId: 'p1', keyword: 'page', module: 'mod' });
-    const parsed = JSON.parse(result.content[0].text as string);
+    const parsed = JSON.parse(result.content[0].text as string).data;
     expect(parsed.results.every((r: { module?: string }) => r.module === 'mod')).toBe(true);
   });
 
   it('returns only page type results', async () => {
     const result = await handleSearchPages(store, { projectId: 'p1', keyword: 'createOrder' });
-    const parsed = JSON.parse(result.content[0].text as string);
+    const parsed = JSON.parse(result.content[0].text as string).data;
     expect(parsed.results.some((r: { type: string }) => r.type === 'api')).toBe(false);
   });
 
@@ -54,7 +54,7 @@ describe('handleSearchPages', () => {
 
   it('indicates fts availability in response', async () => {
     const result = await handleSearchPages(store, { projectId: 'p1', keyword: 'Alpha' });
-    const parsed = JSON.parse(result.content[0].text as string);
+    const parsed = JSON.parse(result.content[0].text as string).data;
     expect(typeof parsed.fts).toBe('boolean');
   });
 });

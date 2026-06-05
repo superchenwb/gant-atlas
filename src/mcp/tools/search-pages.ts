@@ -1,5 +1,12 @@
 import type { Store } from '../../store/sqlite.js';
-import { formatToolError } from './error.js';
+import { z } from 'zod';
+import { formatToolError, formatToolResult, validateToolArgs } from './error.js';
+
+const SearchPagesSchema = z.object({
+  projectId: z.string().min(1),
+  keyword: z.string().min(1),
+  module: z.string().optional(),
+});
 
 /**
  * 按关键词搜索页面，支持 FTS5 全文搜索和模块过滤。
@@ -9,19 +16,11 @@ import { formatToolError } from './error.js';
  * AFTER THIS: 使用 get_page_spec 查看匹配页面的详细规格。
  */
 export async function handleSearchPages(store: Store, args: unknown) {
-  const { projectId, keyword, module } = args as {
-    projectId: string;
-    keyword: string;
-    module?: string;
-  };
-
-  // ─── Input validation ───
-  if (!projectId || typeof projectId !== 'string') {
-    return formatToolError({ code: 'invalid_input', message: 'projectId 是必填字符串' });
+  const validation = validateToolArgs(SearchPagesSchema, args);
+  if (!validation.ok) {
+    return formatToolError(validation.error);
   }
-  if (!keyword || typeof keyword !== 'string' || keyword.trim().length === 0) {
-    return formatToolError({ code: 'invalid_input', message: 'keyword 不能为空字符串' });
-  }
+  const { keyword, module } = validation.data;
 
   // ─── Search ───
   const trimmed = keyword.trim();
@@ -54,22 +53,11 @@ export async function handleSearchPages(store: Store, args: unknown) {
     results = results.filter((n) => n.module === module);
   }
 
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(
-          {
-            results,
-            total: results.length,
-            keyword: trimmed,
-            module: module ?? null,
-            fts: store.isFTS5Available(),
-          },
-          null,
-          2
-        ),
-      },
-    ],
-  };
+  return formatToolResult({
+    results,
+    total: results.length,
+    keyword: trimmed,
+    module: module ?? null,
+    fts: store.isFTS5Available(),
+  });
 }

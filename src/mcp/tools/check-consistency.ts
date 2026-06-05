@@ -1,4 +1,8 @@
 import type { Store } from '../../store/sqlite.js';
+import { z } from 'zod';
+import { formatToolResult, validateToolArgs } from './error.js';
+
+const CheckConsistencySchema = z.object({ pageId: z.string().optional() });
 
 export interface ConsistencyIssue {
   type: string;
@@ -151,15 +155,25 @@ export function runConsistencyChecks(store: Store, pageId?: string): Consistency
 }
 
 export async function handleCheckConsistency(store: Store, args: unknown) {
-  const { pageId } = args as { pageId?: string };
+  const validation = validateToolArgs(CheckConsistencySchema, args);
+  const pageId = validation.ok ? validation.data.pageId : undefined;
+
+  // Reset stale flags for all pages before checking
+  for (const p of store.listNodesByType('page')) {
+    store.markNodeStale(p.id, false);
+  }
+
   const report = runConsistencyChecks(store, pageId);
 
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(report, null, 2),
-      },
-    ],
-  };
+  // Mark incomplete pages as stale
+  for (const issue of report.issues) {
+    if (issue.type === 'incomplete_page') {
+      const match = issue.description.match(/页面 "([^"]+)"/);
+      if (match) {
+        store.markNodeStale(`page:${match[1]}`, true);
+      }
+    }
+  }
+
+  return formatToolResult(report, { count: report.issues.length });
 }

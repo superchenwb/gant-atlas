@@ -7,6 +7,8 @@
  * 本文件 **不依赖** index.ts 中的旧类型，避免循环引用。
  */
 
+import { z } from 'zod';
+
 // ─────────────────────────────────────────
 // 节点类型
 // ─────────────────────────────────────────
@@ -21,6 +23,109 @@ export type NodeType =
   | 'method'
   | 'modal'
   | 'tab';
+
+// ─────────────────────────────────────────
+// Zod Schema: 精确建模各 NodeType 的 meta 字段
+// ─────────────────────────────────────────
+
+/** page 节点的 meta 结构 —— 路由、页面功能、页面类型 */
+export const PageMetaSchema = z.object({
+  route: z.string().optional(),
+  pageFunction: z.string().optional(),
+  pageType: z.string().optional(),
+});
+
+/** field 节点的 meta 结构 —— 控件类型、必填、默认值 */
+export const FieldMetaSchema = z.object({
+  componentType: z.string(),
+  required: z.boolean(),
+  defaultValue: z.string().optional(),
+});
+
+/** column 节点的 meta 结构 —— 可编辑、宽度、排序、数据类型、对齐 */
+export const ColumnMetaSchema = z.object({
+  editable: z.boolean(),
+  width: z.number().optional(),
+  sortable: z.boolean().optional(),
+  dataType: z.string().optional(),
+  align: z.string().optional(),
+});
+
+/** button 节点的 meta 结构 —— 位置、显示/禁用条件、确认弹窗 */
+export const ButtonMetaSchema = z.object({
+  position: z.string().optional(),
+  displayCondition: z.string().optional(),
+  disabledCondition: z.string().optional(),
+  confirmRequired: z.boolean().optional(),
+});
+
+/** api 节点的 meta 结构 —— 当前为空对象（未来可扩展：method、path、description） */
+export const ApiMetaSchema = z.object({});
+
+/** component 节点的 meta 结构 —— 分类、属性 */
+export const ComponentMetaSchema = z.object({
+  category: z.string().optional(),
+  props: z.string().optional(),
+});
+
+/** method 节点的 meta 结构 —— 参数、返回值、文件路径 */
+export const MethodMetaSchema = z.object({
+  params: z.string().optional(),
+  returns: z.string().optional(),
+  filePath: z.string().optional(),
+});
+
+/** modal / tab 占位 schema（尚未有明确字段定义） */
+export const PlaceholderMetaSchema = z.object({}).optional();
+
+// ─── 导出推断类型 ───
+
+export type PageMeta = z.infer<typeof PageMetaSchema>;
+export type FieldMeta = z.infer<typeof FieldMetaSchema>;
+export type ColumnMeta = z.infer<typeof ColumnMetaSchema>;
+export type ButtonMeta = z.infer<typeof ButtonMetaSchema>;
+export type ApiMeta = z.infer<typeof ApiMetaSchema>;
+export type ComponentMeta = z.infer<typeof ComponentMetaSchema>;
+export type MethodMeta = z.infer<typeof MethodMetaSchema>;
+
+/** NodeType → ZodSchema 映射表，用于运行时验证 */
+export const nodeMetaSchemas: Record<NodeType, z.ZodTypeAny> = {
+  page: PageMetaSchema,
+  field: FieldMetaSchema,
+  column: ColumnMetaSchema,
+  button: ButtonMetaSchema,
+  api: ApiMetaSchema,
+  component: ComponentMetaSchema,
+  method: MethodMetaSchema,
+  modal: PlaceholderMetaSchema,
+  tab: PlaceholderMetaSchema,
+};
+
+/**
+ * 验证节点的 meta 字段是否符合对应 NodeType 的 Zod Schema
+ *
+ * @returns { valid: boolean, issues: string[], meta?: Record<string, unknown> }
+ */
+export function validateNodeMeta(node: GraphNode): {
+  valid: boolean;
+  issues: string[];
+  meta?: Record<string, unknown>;
+} {
+  const schema = nodeMetaSchemas[node.type];
+  if (!schema) {
+    return { valid: true, issues: [] };
+  }
+
+  const result = schema.safeParse(node.meta);
+  if (result.success) {
+    return { valid: true, issues: [], meta: result.data as Record<string, unknown> };
+  }
+
+  return {
+    valid: false,
+    issues: result.error.issues.map((i) => `${i.path.join('.') || 'meta'}: ${i.message}`),
+  };
+}
 
 /**
  * 图谱节点 —— 统一实体模型
