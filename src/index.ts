@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { join } from 'path';
+import { NAME, VERSION } from './version.js';
 import { serve } from './mcp/server.js';
 import { runIngest, runQueryPage, runMap, runValidate, runGenerate, runManifest, runStatus } from './cli/actions.js';
 import { setupCommand } from './cli/setup.js';
@@ -8,9 +9,9 @@ import { setupCommand } from './cli/setup.js';
 const program = new Command();
 
 program
-  .name('gant-atlas')
+  .name(NAME)
   .description('业务知识图谱引擎 — 将 feature-docs 解析为可查询的业务关系图')
-  .version('0.1.0');
+  .version(VERSION);
 
 program
   .command('ingest')

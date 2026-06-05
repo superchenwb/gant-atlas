@@ -26,7 +26,7 @@ export function formatToolError(error: ToolError) {
   return {
     content: [
       {
-        type: 'text',
+        type: 'text' as const,
         text: JSON.stringify({ success: false, error, meta: { timestamp: nowIso() } }, null, 2),
       },
     ],
@@ -51,7 +51,7 @@ export function formatToolResult(data: unknown, meta?: Partial<ToolResultMeta>) 
   return {
     content: [
       {
-        type: 'text',
+        type: 'text' as const,
         text: JSON.stringify({ success: true, data, meta: resultMeta }, null, 2),
       },
     ],
