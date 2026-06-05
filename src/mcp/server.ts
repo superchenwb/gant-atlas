@@ -72,7 +72,7 @@ export function createServer(config: ServerConfig): McpServer {
     apiName: z.string().optional(),
     fieldName: z.string().optional(),
     pageId: z.string().optional(),
-    maxDepth: z.number().int().optional(),
+    maxDepth: z.number().int().min(1).max(5).optional(),
   });
 
   const CheckConsistencyInputSchema = z.object({
@@ -94,7 +94,7 @@ export function createServer(config: ServerConfig): McpServer {
     projectId: z.string(),
     query: z.string().min(1),
     taskContext: z.string().optional(),
-    maxNodes: z.number().int().optional(),
+    maxNodes: z.number().int().min(1).max(100).optional(),
     includeCode: z.boolean().optional(),
   });
 
@@ -102,7 +102,7 @@ export function createServer(config: ServerConfig): McpServer {
     projectId: z.string(),
     nodeId: z.string().min(1),
     direction: z.string().optional(),
-    maxDepth: z.number().int().optional(),
+    maxDepth: z.number().int().min(1).max(5).optional(),
   });
 
   const FindDeadApisInputSchema = z.object({
