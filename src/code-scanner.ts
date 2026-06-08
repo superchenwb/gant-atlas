@@ -1,6 +1,7 @@
-import { readFileSync, statSync } from 'fs';
-import { join, basename } from 'path';
+import { readFileSync, readdirSync, statSync } from 'fs';
+import { join, basename, extname } from 'path';
 import type { Store } from './store/sqlite.js';
+import { scanPageButtons, type ButtonCandidate, type HookCandidate } from './scanner/button-scanner.js';
 
 export interface RouteMapping {
   path: string;
@@ -30,6 +31,14 @@ export interface PageCodeInfo {
   fields: SchemaField[];
   columns: SchemaColumn[];
   apis: string[];
+  buttons: ButtonCandidate[];
+  hooks: HookCandidate[];
+  /** Path to the schema file actually used, if any */
+  schemaFilePath?: string;
+  /** Path to the services file actually used, if any */
+  servicesFilePath?: string;
+  /** Notes for the subagent (e.g. "columns are dynamically generated") */
+  notes?: string[];
 }
 
 export interface CodeToSpecMapping {
@@ -422,6 +431,148 @@ async function scanServicesAST(raw: string): Promise<string[]> {
 }
 
 /**
+ * 文件角色检测结果
+ */
+interface FileRoleMatch {
+  /** Best candidate for schema (fields/columns definitions) */
+  schemaFile: string | undefined;
+  /** Best candidate for services (API definitions) */
+  servicesFile: string | undefined;
+}
+
+/**
+ * Detect file roles by content patterns instead of hardcoded names.
+ *
+ * Strategy:
+ * 1. Check conventional names first (schema.ts/schema.tsx, services.ts/services.tsx)
+ *    — if they exist AND match content patterns, use them directly (fast path).
+ * 2. Otherwise, scan all .ts/.tsx files in the directory and classify by content:
+ *    - Schema: contains `searchSchema` or `gridSchema` export
+ *    - Services: contains `xxxApi` function/const definitions
+ */
+function detectFileRoles(pageDir: string): FileRoleMatch {
+  let entries: string[];
+  try {
+    entries = readdirSync(pageDir);
+  } catch {
+    return { schemaFile: undefined, servicesFile: undefined };
+  }
+
+  const tsFiles = entries.filter((e) => {
+    const ext = extname(e);
+    return ext === '.ts' || ext === '.tsx';
+  });
+
+  if (tsFiles.length === 0) {
+    return { schemaFile: undefined, servicesFile: undefined };
+  }
+
+  // Fast path: check conventional names first
+  const conventionalNames = {
+    schema: ['schema.ts', 'schema.tsx'],
+    services: ['services.ts', 'services.tsx', 'service.ts', 'service.tsx', 'api.ts', 'api.tsx'],
+  };
+
+  let schemaFile: string | undefined;
+  let servicesFile: string | undefined;
+
+  // Check conventional schema names
+  for (const name of conventionalNames.schema) {
+    if (tsFiles.includes(name)) {
+      const content = tryReadFile(join(pageDir, name));
+      if (content && isSchemaContent(content)) {
+        schemaFile = join(pageDir, name);
+        break;
+      }
+    }
+  }
+
+  // Check conventional services names
+  for (const name of conventionalNames.services) {
+    if (tsFiles.includes(name)) {
+      const content = tryReadFile(join(pageDir, name));
+      if (content && isServicesContent(content)) {
+        servicesFile = join(pageDir, name);
+        break;
+      }
+    }
+  }
+
+  // If both found via conventional names, we're done
+  if (schemaFile && servicesFile) {
+    return { schemaFile, servicesFile };
+  }
+
+  // Slow path: scan all files by content
+  for (const name of tsFiles) {
+    const filePath = join(pageDir, name);
+    const content = tryReadFile(filePath);
+    if (!content) continue;
+
+    if (!schemaFile && isSchemaContent(content)) {
+      schemaFile = filePath;
+    }
+    if (!servicesFile && isServicesContent(content)) {
+      servicesFile = filePath;
+    }
+
+    if (schemaFile && servicesFile) break;
+  }
+
+  return { schemaFile, servicesFile };
+}
+
+/**
+ * Read file contents, returning undefined on failure.
+ */
+function tryReadFile(filePath: string): string | undefined {
+  try {
+    return readFileSync(filePath, 'utf-8');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Detect if file content contains schema definitions.
+ * Looks for exports named `searchSchema`, `gridSchema`, `columnSchema`, `formSchema`.
+ */
+function isSchemaContent(content: string): boolean {
+  return /(?:export\s+)?(?:const|let|var)\s+(?:search|grid|column|form)[Ss]chema\b/.test(content);
+}
+
+/**
+ * Detect if file content contains API function definitions.
+ * Looks for exports matching `xxxApi` naming convention.
+ */
+function isServicesContent(content: string): boolean {
+  return /(?:export\s+)?(?:const|function)\s+[a-z][a-zA-Z0-9]*Api\s*(?:=|\()/.test(content);
+}
+
+/**
+ * Detect dynamic column generation patterns in page component code.
+ * Returns a note string if dynamic columns are detected, undefined otherwise.
+ */
+function detectDynamicColumns(content: string): string | undefined {
+  const patterns = [
+    /\b(getColumns|useColumns|buildColumns|generateColumns|createColumns)\s*\(/,
+    /\bcolumn(?:Config|Defs|Map)\s*[:=]/,
+    /columns\s*=\s*use[A-Z]\w+\(/,
+    /const\s+\w*[Cc]olumns\w*\s*=\s*use[A-Z]\w+\(/,
+    /gridSchema\s*=\s*(?!\[)[\w$]+/,
+    /columnSchema\s*=\s*(?!\[)[\w$]+/,
+  ];
+
+  for (const pattern of patterns) {
+    if (pattern.test(content)) {
+      return '表格列可能是动态生成的，具体定义见页面组件代码。';
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * 扫描单个页面代码目录
  */
 export async function scanPageDir(pageDir: string, module: string, pageName: string): Promise<PageCodeInfo> {
@@ -432,22 +583,59 @@ export async function scanPageDir(pageDir: string, module: string, pageName: str
     fields: [],
     columns: [],
     apis: [],
+    buttons: [],
+    hooks: [],
   };
 
-  const schemaFile = join(pageDir, 'schema.ts');
-  try {
-    const schema = await scanSchema(schemaFile);
-    info.fields = schema.fields;
-    info.columns = schema.columns;
-  } catch {
-    // schema.ts may not exist
+  // Detect file roles by content patterns (not hardcoded names)
+  const roles = detectFileRoles(pageDir);
+
+  if (roles.schemaFile) {
+    info.schemaFilePath = roles.schemaFile;
+    try {
+      const schema = await scanSchema(roles.schemaFile);
+      info.fields = schema.fields;
+      info.columns = schema.columns;
+    } catch {
+      // Schema file exists but could not be parsed
+    }
   }
 
-  const servicesFile = join(pageDir, 'services.ts');
-  try {
-    info.apis = await scanServices(servicesFile);
-  } catch {
-    // services.ts may not exist
+  if (roles.servicesFile) {
+    info.servicesFilePath = roles.servicesFile;
+    try {
+      info.apis = await scanServices(roles.servicesFile);
+    } catch {
+      // Services file exists but could not be parsed
+    }
+  }
+
+  const buttonScan = await scanPageButtons(pageDir);
+  info.buttons = buttonScan.buttons;
+  info.hooks = buttonScan.hooks;
+
+  // Detect dynamic columns if static schema yielded none
+  if (info.columns.length === 0) {
+    let entries: string[];
+    try {
+      entries = readdirSync(pageDir);
+    } catch {
+      entries = [];
+    }
+    for (const name of entries) {
+      const ext = extname(name);
+      if (ext !== '.ts' && ext !== '.tsx') continue;
+      const base = name.slice(0, -ext.length);
+      if (base === 'schema' || base === 'services' || base === 'types') continue;
+      const content = tryReadFile(join(pageDir, name));
+      if (content) {
+        const note = detectDynamicColumns(content);
+        if (note) {
+          info.notes = [note];
+          break;
+        }
+      }
+    }
   }
 
   return info;

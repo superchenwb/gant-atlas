@@ -41,6 +41,7 @@ describe('createServer', () => {
       'analyze_impact',
       'check_consistency',
       'generate_page_spec',
+      'get_page_generation_context',
       'list_entries',
       'list_projects',
       'explore_context',
@@ -219,5 +220,38 @@ describe('createServer', () => {
     expect(text).toContain('## 查询条件');
     expect(text).toContain('## 表格列');
     expect(text).toContain('## 按钮区域');
+  });
+
+  it('calls get_page_generation_context successfully when configured', async () => {
+    const fixturesDir = join(process.cwd(), 'tests', 'fixtures');
+    const config: ServerConfig = {
+      projects: [
+        {
+          id: 'p1',
+          name: 'P1',
+          docsPath: '/docs',
+          dbPath,
+          codeDir: join(fixturesDir, 'test-module'),
+          routesFile: join(fixturesDir, 'routes-maps.ts'),
+        },
+      ],
+    };
+    const { client } = await createClientServer(config);
+
+    const result = await client.callTool({
+      name: 'get_page_generation_context',
+      arguments: { projectId: 'p1', pageId: 'test-module/simple-page' },
+    });
+
+    const text = (result.content as Array<{ text: string }>)[0].text;
+    const parsed = JSON.parse(text);
+    expect(parsed.pageId).toBe('test-module/simple-page');
+    expect(parsed.route).toBe('/**/simple-page');
+    expect(Array.isArray(parsed.searchFields)).toBe(true);
+    expect(Array.isArray(parsed.gridColumns)).toBe(true);
+    expect(Array.isArray(parsed.apis)).toBe(true);
+    expect(Array.isArray(parsed.buttons)).toBe(true);
+    expect(Array.isArray(parsed.hooks)).toBe(true);
+    expect(parsed.snippets).toBeDefined();
   });
 });

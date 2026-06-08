@@ -10,6 +10,7 @@ import { handleAnalyzeImpact } from './tools/analyze-impact.js';
 import { handleCheckConsistency } from './tools/check-consistency.js';
 import { handleListProjects } from './tools/list-projects.js';
 import { handleGeneratePageSpec } from './tools/generate-page-spec.js';
+import { handleGetPageGenerationContext } from './tools/get-page-generation-context.js';
 import { handleListEntries } from './tools/list-entries.js';
 import { handleExploreContext } from './tools/explore-context.js';
 import { handleGetCallGraph } from './tools/get-call-graph.js';
@@ -81,6 +82,11 @@ export function createServer(config: ServerConfig): McpServer {
   });
 
   const GeneratePageSpecInputSchema = z.object({
+    projectId: z.string(),
+    pageId: z.string().min(1),
+  });
+
+  const GetPageGenerationContextInputSchema = z.object({
     projectId: z.string(),
     pageId: z.string().min(1),
   });
@@ -184,6 +190,22 @@ AFTER THIS: 使用 check_consistency 验证生成的文档与实际代码的一�
     }
     const project = projectMap.get(args.projectId);
     return handleGeneratePageSpec(store, args, project?.codeDir, project?.routesFile);
+  });
+
+  server.registerTool('get_page_generation_context', {
+    description: `获取指定页面的代码扫描上下文（路由、字段、API、按钮、Hook、代码片段）。
+
+WHEN TO USE: 当你需要让 AI 基于代码上下文生成功能清单时使用。返回的是结构化 JSON，不是 Markdown。
+AFTER THIS: 使用 /gant-atlas-generate skill 批量生成完整 Markdown，或让当前对话中的 AI 直接基于此上下文生成。`,
+    inputSchema: GetPageGenerationContextInputSchema,
+    annotations: readOnlyAnnotations,
+  }, async (args) => {
+    const store = getStore(args.projectId);
+    if (!store) {
+      return formatToolError({ code: 'not_found', message: `Unknown project: ${args.projectId}` });
+    }
+    const project = projectMap.get(args.projectId);
+    return handleGetPageGenerationContext(store, args, project?.codeDir, project?.routesFile);
   });
 
   server.registerTool('list_entries', {

@@ -1,0 +1,46 @@
+import { describe, it, expect } from 'vitest';
+import { join } from 'path';
+import { scanPageButtons } from '../../src/scanner/button-scanner.js';
+
+const FIXTURES_DIR = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'simple-page');
+
+describe('scanPageButtons', () => {
+  it('extracts button candidates from TSX page files', async () => {
+    const result = await scanPageButtons(FIXTURES_DIR);
+
+    expect(result.buttons.length).toBeGreaterThanOrEqual(3);
+
+    const addButton = result.buttons.find((b) => b.name === '新增');
+    expect(addButton).toBeDefined();
+    expect(addButton?.element).toBe('Button');
+    expect(addButton?.onClick).toContain('handleAdd');
+    expect(addButton?.disabled).toContain('loading');
+
+    const deleteButton = result.buttons.find((b) => b.name === '删除');
+    expect(deleteButton).toBeDefined();
+    expect(deleteButton?.element).toBe('ActionButton');
+    expect(deleteButton?.onClick).toContain('handleDelete');
+
+    const exportLink = result.buttons.find((b) => b.name === '导出');
+    expect(exportLink).toBeDefined();
+    expect(exportLink?.element).toBe('a');
+  });
+
+  it('extracts custom hooks that call APIs', async () => {
+    const result = await scanPageButtons(FIXTURES_DIR);
+
+    const dataHook = result.hooks.find((h) => h.name === 'useSimplePageData');
+    expect(dataHook).toBeDefined();
+    expect(dataHook?.apis).toContain('simplePageFindListApi');
+
+    const deleteHook = result.hooks.find((h) => h.name === 'useDeleteItem');
+    expect(deleteHook).toBeDefined();
+    expect(deleteHook?.apis).toContain('simplePageSaveApi');
+  });
+
+  it('returns empty arrays for non-existent directories', async () => {
+    const result = await scanPageButtons(join(process.cwd(), 'tests', 'fixtures', 'not-real'));
+    expect(result.buttons).toEqual([]);
+    expect(result.hooks).toEqual([]);
+  });
+});
