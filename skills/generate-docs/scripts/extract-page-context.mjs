@@ -128,8 +128,49 @@ async function main() {
     moduleName = basename(dirname(dirname(pageDir)));
   }
 
-  const codeInfo = await scanPageDir(pageDir, moduleName, pageName);
+  const pathAliases = loadPathAliases(codeDir);
+  const codeInfo = await scanPageDir(pageDir, moduleName, pageName, {
+    codeDir,
+    pathAliases,
+  });
   const context = buildPageGenerationContext(codeInfo, targetRoute);
+
+  // 页面类型检测
+  context.pageType = detectPageType(pageDir);
+
+  // Post-process: extract hook usages from index.tsx to supplement scanPageButtons
+  const mainFile = join(pageDir, 'index.tsx');
+  try {
+    const indexContent = readFileSync(mainFile, 'utf-8');
+    const usedHooks = new Set();
+    const hookRegex = /\b(use[A-Z]\w+)\s*\(/g;
+    let hm;
+    while ((hm = hookRegex.exec(indexContent)) !== null) {
+      const hookName = hm[1];
+      if (
+        [
+          'useState',
+          'useCallback',
+          'useMemo',
+          'useEffect',
+          'useRef',
+          'useContext',
+          'useReducer',
+          'useLayoutEffect',
+        ].includes(hookName)
+      ) {
+        continue;
+      }
+      usedHooks.add(hookName);
+    }
+    for (const hookName of usedHooks) {
+      if (!context.hooks.some((h) => h.name === hookName)) {
+        context.hooks.push({ name: hookName, line: 0, apis: [] });
+      }
+    }
+  } catch {
+    // ignore if index.tsx doesn't exist
+  }
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, JSON.stringify(context, null, 2), 'utf-8');
@@ -138,6 +179,14 @@ async function main() {
     `(fields=${context.searchFields.length}, columns=${context.gridColumns.length}, ` +
     `apis=${context.apis.length}, buttons=${context.buttons.length}, hooks=${context.hooks.length})\n`,
   );
+}
+
+function detectPageType(pageDir) {
+  // 简化的页面类型检测：文件夹路径中包含 /detail/ 即为详情页
+  if (pageDir.toLowerCase().includes('/detail/')) {
+    return 'page-detail';
+  }
+  return 'page-main';
 }
 
 main().catch((err) => {

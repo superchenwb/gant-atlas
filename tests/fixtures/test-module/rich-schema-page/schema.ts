@@ -49,6 +49,31 @@ export const searchSchema = {
     title: tr('未知组件'),
     componentType: someVariable,
   },
+  changeStage: {
+    title: tr('变更阶段'),
+    componentType: 'CodeList',
+    options: {
+      codeType: 'CHANGE_STAGE',
+    },
+    dependencies: ['changeType'],
+    onDependenciesChange: ([changeType]: string[], schema: Schema) => {
+      const visible = changeType !== 'PLATFORM_DRAWING';
+      set(schema, 'hidden', !visible);
+      if (changeType === 'PART_AND_BOM') {
+        set(schema, 'props.includesCodes', ['B']);
+      }
+      return schema;
+    },
+  },
+  createDateStart: {
+    title: tr('创建日期起'),
+    componentType: 'DatePicker',
+    dependencies: ['createDateEnd'],
+    onDependenciesChange: ([value]: string[], schema: Schema) => {
+      set(schema, 'props.disabledDate', disabledDate({ endTime: value }));
+      return schema;
+    },
+  },
 };
 
 export const gridSchema = [

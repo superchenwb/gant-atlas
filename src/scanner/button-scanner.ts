@@ -13,7 +13,7 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, extname } from 'path';
 
 export interface ButtonCandidate {
-  /** Button text extracted from JSX children. */
+  /** Button text extracted from JSX children or label/text/title props. */
   name?: string;
   /** JSX element name, e.g. Button, ActionButton, a. */
   element: string;
@@ -27,6 +27,10 @@ export interface ButtonCandidate {
   disabled?: string;
   /** display/visible condition expression text, if any. */
   displayCondition?: string;
+  /** Permission / auth / access / authority expression text. */
+  permission?: string;
+  /** Confirm / popconfirm configuration expression text. */
+  confirm?: string;
 }
 
 export interface HookCandidate {
@@ -121,9 +125,9 @@ function collectButtonFromJsxElement(
     findJsxAttribute(ts, open.attributes, 'hidden') ||
     findJsxAttribute(ts, open.attributes, 'visible');
 
+  // Extract button text: prefer JSX children, fallback to common text props.
   let name: string | undefined;
   if (ts.isJsxElement(node)) {
-    // Try to extract text children.
     const texts: string[] = [];
     for (const child of node.children) {
       if (ts.isJsxText(child)) {
@@ -134,6 +138,44 @@ function collectButtonFromJsxElement(
       }
     }
     if (texts.length > 0) name = texts.join(' ');
+  }
+  // Fallback to common text props if no children text found.
+  if (!name) {
+    for (const propName of ['label', 'text', 'title', 'name']) {
+      const attr = findJsxAttribute(ts, open.attributes, propName);
+      if (attr?.initializer) {
+        const val = extractAttributeValue(ts, attr.initializer);
+        if (val) {
+          name = val;
+          break;
+        }
+      }
+    }
+  }
+
+  // Extract permission / auth / access / authority.
+  let permission: string | undefined;
+  for (const propName of ['permission', 'auth', 'access', 'authority']) {
+    const attr = findJsxAttribute(ts, open.attributes, propName);
+    if (attr?.initializer) {
+      const val = extractAttributeValue(ts, attr.initializer);
+      if (val) {
+        permission = val;
+        break;
+      }
+    }
+  }
+
+  // Extract confirm / popconfirm configuration.
+  let confirm: string | undefined;
+  for (const propName of ['confirm', 'popconfirm', 'confirmTitle', 'onConfirm']) {
+    const attr = findJsxAttribute(ts, open.attributes, propName);
+    if (attr?.initializer) {
+      const val = extractAttributeValue(ts, attr.initializer);
+      if (val) {
+        confirm = confirm ? `${confirm}; ${propName}=${val}` : `${propName}=${val}`;
+      }
+    }
   }
 
   return {
@@ -150,6 +192,8 @@ function collectButtonFromJsxElement(
     displayCondition: hiddenAttr?.initializer
       ? extractAttributeValue(ts, hiddenAttr.initializer)
       : undefined,
+    permission,
+    confirm,
   };
 }
 
@@ -265,5 +309,79 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
     }
   }
 
+  // Enhance custom button components by reading their source code
+  await enhanceCustomButtonSnippets(buttons, pageDir);
+
   return { buttons, hooks };
+}
+
+/**
+ * For custom button components (e.g. AddButton, RemoveButton), read their
+ * source files and extract key hints (inner standard button, APIs, confirm
+ * config, translated texts) to enrich the snippet.
+ */
+async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: string): Promise<void> {
+  for (const btn of buttons) {
+    // Skip standard button elements
+    if (BUTTON_ELEMENT_NAMES.has(btn.element) || !/[Bb]utton/.test(btn.element)) continue;
+
+    // Try to find the component source directory: e.g. AddButton -> addbutton/index.tsx
+    const componentDir = join(pageDir, btn.element.toLowerCase());
+    let sourceFile: string | undefined;
+    for (const file of ['index.tsx', 'index.ts', `${btn.element}.tsx`, `${btn.element}.ts`]) {
+      const candidate = join(componentDir, file);
+      try {
+        const st = statSync(candidate);
+        if (st.isFile()) {
+          sourceFile = candidate;
+          break;
+        }
+      } catch {
+        // not found
+      }
+    }
+    if (!sourceFile) continue;
+
+    try {
+      const raw = readFileSync(sourceFile, 'utf-8');
+      const hints: string[] = [];
+
+      // Inner standard button call: Button.GradientPrimaryAdd, Button.Remove, etc.
+      const innerBtnMatch = raw.match(/Button\.([A-Za-z]+)/);
+      if (innerBtnMatch) {
+        hints.push(`InnerButton: Button.${innerBtnMatch[1]}`);
+      }
+
+      // API calls inside the component
+      const apiMatches = raw.matchAll(/(\w+Api)\(/g);
+      const apis = new Set<string>();
+      for (const m of apiMatches) apis.add(m[1]);
+      if (apis.size > 0) {
+        hints.push(`APIs: ${Array.from(apis).join(', ')}`);
+      }
+
+      // Confirm / remove hooks
+      const confirmMatch = raw.match(/useConfirm(\w+)/);
+      if (confirmMatch) {
+        hints.push(`ConfirmHook: useConfirm${confirmMatch[1]}`);
+      }
+
+      // Translated texts (first 3 unique ones)
+      const trMatches = raw.matchAll(/tr\(['"`]([^'"`]+)['"`]\)/g);
+      const texts = new Set<string>();
+      for (const m of trMatches) {
+        texts.add(m[1]);
+        if (texts.size >= 3) break;
+      }
+      if (texts.size > 0) {
+        hints.push(`Labels: ${Array.from(texts).join(' | ')}`);
+      }
+
+      if (hints.length > 0) {
+        btn.snippet = `${btn.snippet}\n// Component hints from ${btn.element}:\n// ${hints.join('\n// ')}`;
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
 }

@@ -36,12 +36,12 @@ describe('scanSchema', () => {
     const result = await scanSchema(schemaFile);
 
     expect(result.fields.length).toBe(2);
-    expect(result.fields[0]).toEqual({ name: 'userName', title: '用户名', componentType: 'Input' });
-    expect(result.fields[1]).toEqual({ name: 'status', title: '状态', componentType: 'Select' });
+    expect(result.fields[0]).toMatchObject({ name: 'userName', title: '用户名', componentType: 'Input' });
+    expect(result.fields[1]).toMatchObject({ name: 'status', title: '状态', componentType: 'Select' });
 
     expect(result.columns.length).toBe(2);
-    expect(result.columns[0]).toEqual({ fieldName: 'userName', title: '用户名' });
-    expect(result.columns[1]).toEqual({ fieldName: 'status', title: '状态标签' });
+    expect(result.columns[0]).toMatchObject({ fieldName: 'userName', title: '用户名' });
+    expect(result.columns[1]).toMatchObject({ fieldName: 'status', title: '状态标签' });
   });
 
   it('extracts componentType and options from rich schema', async () => {
@@ -49,13 +49,13 @@ describe('scanSchema', () => {
     const result = await scanSchema(schemaFile);
 
     // fields
-    expect(result.fields.length).toBe(9);
+    expect(result.fields.length).toBe(11);
 
     const materialCode = result.fields.find((f) => f.name === 'materialCode');
-    expect(materialCode).toEqual({ name: 'materialCode', title: '物料编码', componentType: 'Input' });
+    expect(materialCode).toMatchObject({ name: 'materialCode', title: '物料编码', componentType: 'Input' });
 
     const status = result.fields.find((f) => f.name === 'status');
-    expect(status).toEqual({
+    expect(status).toMatchObject({
       name: 'status',
       title: '状态',
       componentType: 'CodeList',
@@ -63,7 +63,7 @@ describe('scanSchema', () => {
     });
 
     const orgId = result.fields.find((f) => f.name === 'orgId');
-    expect(orgId).toEqual({
+    expect(orgId).toMatchObject({
       name: 'orgId',
       title: '组织',
       componentType: 'TreeSelect',
@@ -71,13 +71,33 @@ describe('scanSchema', () => {
     });
 
     const unknownField = result.fields.find((f) => f.name === 'unknownField');
-    expect(unknownField).toEqual({ name: 'unknownField', title: '未知组件' });
+    expect(unknownField).toMatchObject({ name: 'unknownField', title: '未知组件' });
+
+    // dependencies extraction
+    const changeStage = result.fields.find((f) => f.name === 'changeStage');
+    expect(changeStage).toMatchObject({
+      name: 'changeStage',
+      title: '变更阶段',
+      componentType: 'CodeList',
+      dependencies: ['changeType'],
+    });
+    expect(changeStage?.onDependenciesChange).toContain('hidden');
+    expect(changeStage?.onDependenciesChange).toContain('PART_AND_BOM');
+
+    const createDateStart = result.fields.find((f) => f.name === 'createDateStart');
+    expect(createDateStart).toMatchObject({
+      name: 'createDateStart',
+      title: '创建日期起',
+      componentType: 'DatePicker',
+      dependencies: ['createDateEnd'],
+    });
+    expect(createDateStart?.onDependenciesChange).toContain('disabledDate');
 
     // columns
     expect(result.columns.length).toBe(3);
 
     const statusCol = result.columns.find((c) => c.fieldName === 'status');
-    expect(statusCol).toEqual({
+    expect(statusCol).toMatchObject({
       fieldName: 'status',
       title: '状态',
       componentType: 'CodeList',
@@ -85,7 +105,7 @@ describe('scanSchema', () => {
     });
 
     const createDateCol = result.columns.find((c) => c.fieldName === 'createDate');
-    expect(createDateCol).toEqual({ fieldName: 'createDate', title: '创建日期' });
+    expect(createDateCol).toMatchObject({ fieldName: 'createDate', title: '创建日期' });
   });
 });
 
