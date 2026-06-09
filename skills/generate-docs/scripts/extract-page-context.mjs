@@ -182,8 +182,9 @@ async function main() {
 }
 
 function detectPageType(pageDir) {
-  // 简化的页面类型检测：文件夹路径中包含 /detail/ 即为详情页
-  if (pageDir.toLowerCase().includes('/detail/')) {
+  // 简化的页面类型检测：文件夹路径中包含 /detail/ 或目录名为 detail 即为详情页
+  const lower = pageDir.toLowerCase();
+  if (lower.includes('/detail/') || lower.endsWith('/detail')) {
     return 'page-detail';
   }
   return 'page-main';
