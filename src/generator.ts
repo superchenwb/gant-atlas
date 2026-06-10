@@ -13,7 +13,7 @@ function escapeMdCell(text: string): string {
 
 function formatComponentType(field: SchemaField | SchemaColumn): string {
   if (field.componentType) return field.componentType;
-  return 'Input [需确认]';
+  return 'Input';
 }
 
 export function generatePageSkeleton(
