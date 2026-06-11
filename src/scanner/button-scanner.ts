@@ -44,9 +44,17 @@ export interface HookCandidate {
   apis: string[];
 }
 
+export interface TabInfo {
+  /** Tab label text (e.g. '特征清单'). */
+  label: string;
+  /** Tab key (e.g. 'featureList'). */
+  key: string;
+}
+
 export interface PageButtonScanResult {
   buttons: ButtonCandidate[];
   hooks: HookCandidate[];
+  tabs: TabInfo[];
 }
 
 const BUTTON_ELEMENT_NAMES = new Set([
@@ -61,9 +69,9 @@ const IGNORED_FILES = new Set(['schema.ts', 'schema.tsx', 'services.ts', 'servic
 
 /**
  * Files to ignore only in sub-directories (not the page root).
- * The page entry file (index.tsx) must be scanned for inline buttons.
+ * Used by legacy scanning; Phase 2 (*button* dirs) uses IGNORED_FILES instead
+ * to keep index.tsx — it IS the button component entry.
  */
-const IGNORED_IN_SUBDIRS = new Set(['schema.ts', 'schema.tsx', 'services.ts', 'service.ts', 'index.ts', 'index.tsx', 'types.ts', 'store.ts', 'auth.ts', 'style.ts']);
 
 function isButtonLikeElement(name: string): boolean {
   return BUTTON_ELEMENT_NAMES.has(name) || /[Bb]utton/.test(name);
@@ -250,6 +258,7 @@ async function scanFile(filePath: string): Promise<PageButtonScanResult> {
 
   const buttons: ButtonCandidate[] = [];
   const hooks: HookCandidate[] = [];
+  const tabs: TabInfo[] = [];
 
   function visit(node: import('typescript').Node) {
     // JSX buttons
@@ -267,38 +276,95 @@ async function scanFile(filePath: string): Promise<PageButtonScanResult> {
       hooks.push({ name: hookName, snippet, line, apis });
     }
 
+    // Tab items: extract { label: tr('xxx'), key: 'yyy' } patterns from array/object literals
+    if (ts.isArrayLiteralExpression(node)) {
+      extractTabsFromArray(ts, node, tabs);
+    }
+    // Also catch useMemo(() => [...], [...]) returning tab arrays
+    if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isArrowFunction(node.arguments[0])) {
+      const body = node.arguments[0].body;
+      if (ts.isArrayLiteralExpression(body)) {
+        extractTabsFromArray(ts, body, tabs);
+      }
+    }
+
     ts.forEachChild(node, visit);
   }
 
   visit(sourceFile);
-  return { buttons, hooks };
+  return { buttons, hooks, tabs };
 }
 
 /**
- * Recursively walk a directory, collecting source files for button scanning.
- *
- * Strategy:
- * - Root level (depth=0): scan all .ts/.tsx files (catches index.tsx inline buttons).
- * - Sub-directories (depth>0): only recurse into directories whose name contains "button".
- *   This avoids picking up buttons from sub-panels (e.g. dataauthvalue/, editdrawer/)
- *   while capturing all button component directories (e.g. addbutton/, removebutton/).
+ * Generic tab extraction: find objects with both 'label' and 'key' properties
+ * in an array literal. Works with any Tab component (TabsButton, Tabs, etc.).
  */
-function collectSourceFiles(dir: string, depth = 0): string[] {
-  // Limit recursion depth to avoid scanning too deep into unrelated sub-components.
-  if (depth > 2) return [];
+function extractTabsFromArray(
+  ts: typeof import('typescript'),
+  arr: import('typescript').ArrayLiteralExpression,
+  tabs: TabInfo[]
+): void {
+  for (const elem of arr.elements) {
+    if (!ts.isObjectLiteralExpression(elem)) continue;
+    let label: string | undefined;
+    let key: string | undefined;
 
-  let entries: string[];
+    for (const prop of elem.properties) {
+      if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
+      // Extract string value, handling tr('xxx') wrapper
+      const val = extractTabStringLiteral(ts, prop.initializer);
+      if (prop.name.text === 'label' && val) label = val;
+      if (prop.name.text === 'key' && val) key = val;
+    }
+
+    if (label && key) {
+      tabs.push({ label, key });
+    }
+  }
+}
+
+/**
+ * Extract a string value from a node, unwrapping tr('xxx') calls.
+ */
+function extractTabStringLiteral(
+  ts: typeof import('typescript'),
+  node: import('typescript').Node
+): string | undefined {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  // Unwrap tr('xxx') or tr("xxx")
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'tr') {
+    if (node.arguments.length > 0) {
+      return extractTabStringLiteral(ts, node.arguments[0]);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Two-phase source file collection for button scanning.
+ *
+ * Phase 1: scan root-level files (catches index.tsx inline buttons).
+ * Phase 2: recursively discover all *button* directories at any depth,
+ *          scanning files within them. This reaches nested button components
+ *          like featuregridlist/linkfeaturebutton/ without coupling to
+ *          parent directory naming conventions.
+ */
+function collectSourceFiles(pageDir: string): string[] {
+  const files: string[] = [];
+  const seen = new Set<string>();
+
+  // Phase 1: root-level files
+  let rootEntries: string[];
   try {
-    entries = readdirSync(dir);
+    rootEntries = readdirSync(pageDir);
   } catch {
     return [];
   }
 
-  const files: string[] = [];
-
-  for (const entry of entries) {
-    const fullPath = join(dir, entry);
-
+  for (const entry of rootEntries) {
+    const fullPath = join(pageDir, entry);
     let st;
     try {
       st = statSync(fullPath);
@@ -306,26 +372,77 @@ function collectSourceFiles(dir: string, depth = 0): string[] {
       continue;
     }
 
-    if (st.isDirectory()) {
-      // Skip common non-source directories
-      if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
-      // Only recurse into *button* directories to avoid scanning sub-panels/drawers
-      if (depth > 0 && !/button/i.test(entry)) continue;
-      files.push(...collectSourceFiles(fullPath, depth + 1));
-    } else if (st.isFile()) {
+    if (st.isFile()) {
       const ext = extname(entry);
-      if (ext !== '.ts' && ext !== '.tsx') continue;
-      // At root level (depth=0), ignore only non-source files (schema, services, etc.)
-      // but keep index.tsx for inline button detection.
-      // In sub-directories, also ignore index.tsx to avoid scanning sub-panel entries.
-      const ignoreSet = depth === 0 ? IGNORED_FILES : IGNORED_IN_SUBDIRS;
-      if (!ignoreSet.has(entry)) {
-        files.push(fullPath);
+      if ((ext === '.ts' || ext === '.tsx') && !IGNORED_FILES.has(entry)) {
+        if (!seen.has(fullPath)) {
+          seen.add(fullPath);
+          files.push(fullPath);
+        }
+      }
+    }
+  }
+
+  // Phase 2: discover *button* directories at any depth
+  const buttonDirs: string[] = [];
+  findButtonDirs(pageDir, buttonDirs);
+
+  for (const dir of buttonDirs) {
+    let dirEntries: string[];
+    try {
+      dirEntries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of dirEntries) {
+      const fullPath = join(dir, entry);
+      try {
+        if (!statSync(fullPath).isFile()) continue;
+      } catch {
+        continue;
+      }
+      const ext = extname(entry);
+      // In *button* directories, keep index.tsx — it IS the button component entry
+      if ((ext === '.ts' || ext === '.tsx') && !IGNORED_FILES.has(entry)) {
+        if (!seen.has(fullPath)) {
+          seen.add(fullPath);
+          files.push(fullPath);
+        }
       }
     }
   }
 
   return files;
+}
+
+/**
+ * Walk the tree and collect directories whose name contains "button".
+ * Generic — does not depend on specific naming conventions.
+ */
+function findButtonDirs(dir: string, result: string[], depth = 0): void {
+  if (depth > 6) return;
+
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
+    const fullPath = join(dir, entry);
+    try {
+      if (!statSync(fullPath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (/button/i.test(entry)) {
+      result.push(fullPath);
+    }
+    // Always recurse deeper — we want to find button dirs at any level
+    findButtonDirs(fullPath, result, depth + 1);
+  }
 }
 
 /**
@@ -337,6 +454,7 @@ function collectSourceFiles(dir: string, depth = 0): string[] {
 export async function scanPageButtons(pageDir: string): Promise<PageButtonScanResult> {
   const buttons: ButtonCandidate[] = [];
   const hooks: HookCandidate[] = [];
+  const tabs: TabInfo[] = [];
 
   const sourceFiles = collectSourceFiles(pageDir);
 
@@ -345,6 +463,7 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
       const result = await scanFile(filePath);
       buttons.push(...result.buttons);
       hooks.push(...result.hooks);
+      if (result.tabs.length > 0) tabs.push(...result.tabs);
     } catch {
       // Per-file resilience: skip files that fail to parse.
     }
@@ -353,7 +472,7 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
   // Enhance custom button components by reading their source code
   await enhanceCustomButtonSnippets(buttons, pageDir);
 
-  return { buttons, hooks };
+  return { buttons, hooks, tabs };
 }
 
 /**
