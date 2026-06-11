@@ -61,6 +61,12 @@ const BUTTON_ELEMENT_NAMES = new Set([
 
 const IGNORED_FILES = new Set(['schema.ts', 'schema.tsx', 'services.ts', 'service.ts', 'index.ts', 'types.ts', 'store.ts', 'auth.ts', 'style.ts']);
 
+/**
+ * Files to ignore only in sub-directories (not the page root).
+ * The page entry file (index.tsx) must be scanned for inline buttons.
+ */
+const IGNORED_IN_SUBDIRS = new Set(['schema.ts', 'schema.tsx', 'services.ts', 'service.ts', 'index.ts', 'index.tsx', 'types.ts', 'store.ts', 'auth.ts', 'style.ts']);
+
 function isButtonLikeElement(name: string): boolean {
   return BUTTON_ELEMENT_NAMES.has(name) || /[Bb]utton/.test(name);
 }
@@ -271,8 +277,13 @@ async function scanFile(filePath: string): Promise<PageButtonScanResult> {
 }
 
 /**
- * Recursively walk a directory, collecting all .ts/.tsx file paths
- * (excluding well-known non-source files and directories).
+ * Recursively walk a directory, collecting source files for button scanning.
+ *
+ * Strategy:
+ * - Root level (depth=0): scan all .ts/.tsx files (catches index.tsx inline buttons).
+ * - Sub-directories (depth>0): only recurse into directories whose name contains "button".
+ *   This avoids picking up buttons from sub-panels (e.g. dataauthvalue/, editdrawer/)
+ *   while capturing all button component directories (e.g. addbutton/, removebutton/).
  */
 function collectSourceFiles(dir: string, depth = 0): string[] {
   // Limit recursion depth to avoid scanning too deep into unrelated sub-components.
@@ -300,10 +311,17 @@ function collectSourceFiles(dir: string, depth = 0): string[] {
     if (st.isDirectory()) {
       // Skip common non-source directories
       if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
+      // Only recurse into *button* directories to avoid scanning sub-panels/drawers
+      if (depth > 0 && !/button/i.test(entry)) continue;
       files.push(...collectSourceFiles(fullPath, depth + 1));
     } else if (st.isFile()) {
       const ext = extname(entry);
-      if ((ext === '.ts' || ext === '.tsx') && !IGNORED_FILES.has(entry)) {
+      if (ext !== '.ts' && ext !== '.tsx') continue;
+      // At root level (depth=0), ignore only non-source files (schema, services, etc.)
+      // but keep index.tsx for inline button detection.
+      // In sub-directories, also ignore index.tsx to avoid scanning sub-panel entries.
+      const ignoreSet = depth === 0 ? IGNORED_FILES : IGNORED_IN_SUBDIRS;
+      if (!ignoreSet.has(entry)) {
         files.push(fullPath);
       }
     }
