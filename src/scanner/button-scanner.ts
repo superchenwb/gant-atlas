@@ -55,8 +55,6 @@ const BUTTON_ELEMENT_NAMES = new Set([
   'ToolbarButton',
   'IconButton',
   'ButtonGroup',
-  'a',
-  'Link',
 ]);
 
 const IGNORED_FILES = new Set(['schema.ts', 'schema.tsx', 'services.ts', 'service.ts', 'index.ts', 'types.ts', 'store.ts', 'auth.ts', 'style.ts']);
