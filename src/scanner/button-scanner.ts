@@ -59,7 +59,7 @@ const BUTTON_ELEMENT_NAMES = new Set([
   'Link',
 ]);
 
-const IGNORED_FILES = new Set(['schema.ts', 'services.ts', 'index.ts', 'types.ts']);
+const IGNORED_FILES = new Set(['schema.ts', 'schema.tsx', 'services.ts', 'service.ts', 'index.ts', 'types.ts', 'store.ts', 'auth.ts', 'style.ts']);
 
 function isButtonLikeElement(name: string): boolean {
   return BUTTON_ELEMENT_NAMES.has(name) || /[Bb]utton/.test(name);
@@ -271,35 +271,60 @@ async function scanFile(filePath: string): Promise<PageButtonScanResult> {
 }
 
 /**
+ * Recursively walk a directory, collecting all .ts/.tsx file paths
+ * (excluding well-known non-source files and directories).
+ */
+function collectSourceFiles(dir: string, depth = 0): string[] {
+  // Limit recursion depth to avoid scanning too deep into unrelated sub-components.
+  if (depth > 2) return [];
+
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry);
+
+    let st;
+    try {
+      st = statSync(fullPath);
+    } catch {
+      continue;
+    }
+
+    if (st.isDirectory()) {
+      // Skip common non-source directories
+      if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
+      files.push(...collectSourceFiles(fullPath, depth + 1));
+    } else if (st.isFile()) {
+      const ext = extname(entry);
+      if ((ext === '.ts' || ext === '.tsx') && !IGNORED_FILES.has(entry)) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  return files;
+}
+
+/**
  * Scan a page directory for buttons and hooks.
  *
- * Reads all .ts/.tsx files except schema.ts, services.ts, index.ts, types.ts
- * and well-known non-source directories.
+ * Recursively reads all .ts/.tsx files (excluding well-known non-source files
+ * like schema.ts, services.ts, etc.) to discover button components and custom hooks.
  */
 export async function scanPageButtons(pageDir: string): Promise<PageButtonScanResult> {
   const buttons: ButtonCandidate[] = [];
   const hooks: HookCandidate[] = [];
 
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(pageDir);
-  } catch {
-    return { buttons, hooks };
-  }
+  const sourceFiles = collectSourceFiles(pageDir);
 
-  for (const entry of entries) {
-    if (IGNORED_FILES.has(entry)) continue;
-    const ext = extname(entry);
-    if (ext !== '.ts' && ext !== '.tsx') continue;
-
-    const filePath = join(pageDir, entry);
-    try {
-      const st = statSync(filePath);
-      if (!st.isFile()) continue;
-    } catch {
-      continue;
-    }
-
+  for (const filePath of sourceFiles) {
     try {
       const result = await scanFile(filePath);
       buttons.push(...result.buttons);
@@ -319,6 +344,10 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
  * For custom button components (e.g. AddButton, RemoveButton), read their
  * source files and extract key hints (inner standard button, APIs, confirm
  * config, translated texts) to enrich the snippet.
+ *
+ * Enhancement: the first translated label text found will be promoted to
+ * `name` if the button doesn't already have one, so that the generated
+ * button-area.md shows a human-readable name instead of the component class name.
  */
 async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: string): Promise<void> {
   for (const btn of buttons) {
@@ -350,6 +379,11 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
       const innerBtnMatch = raw.match(/Button\.([A-Za-z]+)/);
       if (innerBtnMatch) {
         hints.push(`InnerButton: Button.${innerBtnMatch[1]}`);
+
+        // Infer human-readable name from known Button.* patterns
+        if (!btn.name) {
+          btn.name = inferNameFromButtonVariant(innerBtnMatch[1]);
+        }
       }
 
       // API calls inside the component
@@ -358,12 +392,26 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
       for (const m of apiMatches) apis.add(m[1]);
       if (apis.size > 0) {
         hints.push(`APIs: ${Array.from(apis).join(', ')}`);
+
+        // Promote API calls to onClick hint if no onClick was captured
+        if (!btn.onClick) {
+          btn.onClick = Array.from(apis).join(', ');
+        }
       }
 
       // Confirm / remove hooks
-      const confirmMatch = raw.match(/useConfirm(\w+)/);
+      const confirmMatch = raw.match(/useConfirm(\w*)/);
       if (confirmMatch) {
         hints.push(`ConfirmHook: useConfirm${confirmMatch[1]}`);
+        if (!btn.confirm) {
+          btn.confirm = '是';
+        }
+      }
+
+      // Popconfirm or confirm on standard Button
+      const popconfirmMatch = raw.match(/(?:Popconfirm|popconfirm|confirm\s*[:=])/);
+      if (popconfirmMatch && !btn.confirm) {
+        btn.confirm = '是';
       }
 
       // Translated texts (first 3 unique ones)
@@ -375,6 +423,11 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
       }
       if (texts.size > 0) {
         hints.push(`Labels: ${Array.from(texts).join(' | ')}`);
+
+        // Use first translated text as button name if still unnamed
+        if (!btn.name) {
+          btn.name = Array.from(texts)[0];
+        }
       }
 
       if (hints.length > 0) {
@@ -384,4 +437,65 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
       // ignore read errors
     }
   }
+}
+
+/**
+ * Map Button.* variant names to human-readable Chinese labels.
+ * Covers the common patterns used in gant-procomponents.
+ */
+function inferNameFromButtonVariant(variant: string): string | undefined {
+  const map: Record<string, string> = {
+    // Add variants
+    PrimaryAdd: '新增',
+    GradientPrimaryAdd: '新增',
+    Add: '新增',
+    // Remove / Delete variants
+    Remove: '删除',
+    Delete: '删除',
+    DangerRemove: '删除',
+    // Edit variants
+    Edit: '编辑',
+    PrimaryEdit: '编辑',
+    // Save variants
+    Save: '保存',
+    PrimarySave: '保存',
+    // Cancel variants
+    Cancel: '取消',
+    // Import / Export variants
+    Import: '导入',
+    Export: '导出',
+    PrimaryExport: '导出',
+    // Submit variants
+    Submit: '提交',
+    PrimarySubmit: '提交',
+    // Query / Search variants
+    Search: '查询',
+    Query: '查询',
+    // Reset variants
+    Reset: '重置',
+    // Refresh variants
+    Refresh: '刷新',
+    // Copy variants
+    Copy: '复制',
+    // Download variants
+    Download: '下载',
+    // More / Action variants
+    More: '更多',
+    Action: '操作',
+  };
+
+  // Exact match first
+  if (map[variant]) return map[variant];
+
+  // Prefix match: e.g. "PrimaryExport" -> try "Export"
+  for (const [key, label] of Object.entries(map)) {
+    if (variant.endsWith(key)) return label;
+  }
+
+  // Suffix heuristic: "GradientPrimaryAdd" -> contains "Add" -> "新增"
+  for (const keyword of ['Add', 'Remove', 'Delete', 'Edit', 'Save', 'Import', 'Export', 'Submit', 'Search', 'Copy', 'Download', 'Refresh', 'Reset']) {
+    if (variant.includes(keyword)) return map[keyword] ?? keyword;
+  }
+
+  return undefined;
 }

@@ -1,4 +1,5 @@
 import type { PageCodeInfo, RouteMapping, SchemaField, SchemaColumn } from './code-scanner.js';
+import type { ButtonCandidate } from './scanner/button-scanner.js';
 
 export interface GeneratedSkeleton {
   mainMd: string;
@@ -26,7 +27,7 @@ export function generatePageSkeleton(
     mainMd: generateMainMd(pageTitle, info, routeMapping),
     searchAreaMd: generateSearchAreaMd(info.fields),
     gridAreaMd: generateGridAreaMd(info.columns),
-    buttonAreaMd: generateButtonAreaMd(),
+    buttonAreaMd: generateButtonAreaMd(info.buttons ?? []),
   };
 }
 
@@ -89,10 +90,56 @@ function generateGridAreaMd(columns: SchemaColumn[]): string {
   return lines.join('\n');
 }
 
-function generateButtonAreaMd(): string {
+function generateButtonAreaMd(buttons: ButtonCandidate[]): string {
   const lines: string[] = ['## 按钮区域', ''];
   lines.push('| 按钮名称 | 作用域 | 位置 | 显示条件 | 禁用条件 | 点击结果 | 确认弹窗 |');
   lines.push('|----------|--------|------|----------|----------|----------|----------|');
+
+  for (const btn of buttons) {
+    const name = escapeMdCell(btn.name ?? btn.element ?? '');
+    const scope = escapeMdCell(inferButtonScope(btn));
+    const position = escapeMdCell(inferButtonPosition(btn));
+    const display = escapeMdCell(btn.displayCondition ?? '');
+    const disabled = escapeMdCell(btn.disabled ?? '');
+    const onClick = escapeMdCell(btn.onClick ?? '');
+    const confirm = escapeMdCell(btn.confirm ? '是' : '');
+    lines.push(`| ${name} | ${scope} | ${position} | ${display} | ${disabled} | ${onClick} | ${confirm} |`);
+  }
+
   lines.push('');
   return lines.join('\n');
 }
+
+/**
+ * Infer button scope from the component name or props.
+ * Custom components like AddButton/RemoveButton are typically toolbar-level;
+ * components with "Row" / "row" in name are row-level.
+ */
+function inferButtonScope(btn: ButtonCandidate): string {
+  const name = (btn.name ?? btn.element ?? '').toLowerCase();
+  if (name.includes('row') || name.includes('行')) return '行级';
+  if (name.includes('toolbar') || name.includes('工具栏')) return '页面';
+  // Most custom button components (AddButton, RemoveButton, etc.) are toolbar-level
+  if (/[Bb]utton/.test(btn.element) && !BUTTON_ELEMENT_NAMES.has(btn.element)) return '页面';
+  return '';
+}
+
+/**
+ * Infer button position (toolbar / grid / header).
+ */
+function inferButtonPosition(btn: ButtonCandidate): string {
+  if (btn.element === 'ToolbarButton') return 'toolbar';
+  // Standard Button in JSX is typically toolbar-level
+  if (btn.element === 'Button' || btn.element === 'ActionButton') return 'toolbar';
+  return '';
+}
+
+const BUTTON_ELEMENT_NAMES = new Set([
+  'Button',
+  'ActionButton',
+  'ToolbarButton',
+  'IconButton',
+  'ButtonGroup',
+  'a',
+  'Link',
+]);
