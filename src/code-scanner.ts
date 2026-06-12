@@ -47,6 +47,8 @@ export interface PageCodeInfo {
   apis: string[];
   buttons: ButtonCandidate[];
   hooks: HookCandidate[];
+  tabs: Array<{ label: string; key: string }>;
+  permissions: string[];
   /** Path to the schema file actually used, if any */
   schemaFilePath?: string;
   /** Path to the services file actually used, if any */
@@ -1219,6 +1221,8 @@ export async function scanPageDir(
     apis: [],
     buttons: [],
     hooks: [],
+    tabs: [],
+    permissions: [],
   };
 
   // Detect file roles by content patterns (not hardcoded names)
@@ -1272,6 +1276,8 @@ export async function scanPageDir(
   const buttonScan = await scanPageButtons(pageDir);
   info.buttons = buttonScan.buttons;
   info.hooks = buttonScan.hooks;
+  info.tabs = buttonScan.tabs;
+  info.permissions = buttonScan.permissions;
 
   // Extract API URLs from hook calls in the main component file
   const mainFile = findMainComponentFile(pageDir);

@@ -55,6 +55,8 @@ export interface PageButtonScanResult {
   buttons: ButtonCandidate[];
   hooks: HookCandidate[];
   tabs: TabInfo[];
+  /** Permission identifiers extracted from auth files. */
+  permissions: string[];
 }
 
 const BUTTON_ELEMENT_NAMES = new Set([
@@ -292,7 +294,7 @@ async function scanFile(filePath: string): Promise<PageButtonScanResult> {
   }
 
   visit(sourceFile);
-  return { buttons, hooks, tabs };
+  return { buttons, hooks, tabs, permissions: [] };
 }
 
 /**
@@ -317,8 +319,11 @@ function extractTabsFromArray(
       if (prop.name.text === 'key' && val) key = val;
     }
 
-    if (label && key) {
-      tabs.push({ label, key });
+    if (label || key) {
+      tabs.push({
+        label: label ?? key ?? '',
+        key: key ?? label ?? '',
+      });
     }
   }
 }
@@ -338,6 +343,15 @@ function extractTabStringLiteral(
     if (node.arguments.length > 0) {
       return extractTabStringLiteral(ts, node.arguments[0]);
     }
+  }
+  // Handle variable references — extract source text for LLM interpretation
+  // e.g. ConfigTabsType.featureList → "ConfigTabsType.featureList"
+  if (ts.isPropertyAccessExpression(node)) {
+    return node.getText();
+  }
+  // e.g. featureList (bare identifier)
+  if (ts.isIdentifier(node)) {
+    return node.text;
   }
   return undefined;
 }
@@ -472,7 +486,10 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
   // Enhance custom button components by reading their source code
   await enhanceCustomButtonSnippets(buttons, pageDir);
 
-  return { buttons, hooks, tabs };
+  // Extract permission identifiers from auth files
+  const permissions = extractPermissions(pageDir);
+
+  return { buttons, hooks, tabs, permissions };
 }
 
 /**
@@ -633,4 +650,56 @@ function inferNameFromButtonVariant(variant: string): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * Extract permission identifiers from auth-like files.
+ * Reads auth.ts/auth.tsx and collects string literals from
+ * auth-related function calls.
+ * Generic — does not depend on specific function names.
+ */
+export function extractPermissions(pageDir: string): string[] {
+  const permissions: string[] = [];
+
+  for (const fileName of ['auth.ts', 'auth.tsx']) {
+    const filePath = join(pageDir, fileName);
+    let raw: string;
+    try {
+      raw = readFileSync(filePath, 'utf-8');
+    } catch {
+      continue;
+    }
+
+    // Pattern 1: useXxxAuth / useXxxPermission / useXxxAccess — extract string values from object arg
+    const authObjMatches = raw.matchAll(/use\w*(?:Auth|Permission|Access)\s*\(\s*\{([^}]+)\}/gs);
+    for (const m of authObjMatches) {
+      const strValues = m[1].matchAll(/['"`]([^'"`]+)['"`]/g);
+      for (const sv of strValues) {
+        if (!permissions.includes(sv[1])) permissions.push(sv[1]);
+      }
+    }
+
+    // Pattern 2: checkAuth('perm') / hasPermission('perm') / getAuth('perm')
+    const directMatches = raw.matchAll(/(?:checkAuth|hasAuth|hasPermission|getAuth)\s*\(\s*['"`]([^'"`]+)['"`]/g);
+    for (const dm of directMatches) {
+      if (!permissions.includes(dm[1])) permissions.push(dm[1]);
+    }
+
+    // Pattern 3: moduleAuth('xxx') / auth('xxx') — string literals passed to auth-like functions
+    const moduleAuthMatches = raw.matchAll(/(?:moduleAuth|auth|usePageAuth)\s*\(\s*['"`]([^'"`]+)['"`]/g);
+    for (const mm of moduleAuthMatches) {
+      if (!permissions.includes(mm[1])) permissions.push(mm[1]);
+    }
+
+    // Pattern 4: usePageAuth({ key: string }) — extract string values from object literal
+    const pageAuthMatches = raw.matchAll(/usePageAuth\s*\(\s*\{([^}]+)\}/gs);
+    for (const pm of pageAuthMatches) {
+      const kvPairs = pm[1].matchAll(/['"`]([^'"`]+)['"`]/g);
+      for (const kv of kvPairs) {
+        if (!permissions.includes(kv[1])) permissions.push(kv[1]);
+      }
+    }
+  }
+
+  return permissions;
 }

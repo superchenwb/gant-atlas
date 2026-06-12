@@ -26,6 +26,8 @@
   apiUrls?: ["/custMbom/find", "/custMbom/expand"],
   buttons: [{ name?, element, line, onClick?, disabled?, displayCondition?, permission?, confirm?, batch?, behavior?, popupType? }],
   hooks: [{ name, line, apis: [] }],
+  tabs: [{ label: "特征清单", key: "featureList" }],  // NEW: tab 结构
+  permissions: ["新增规则定义", "删除规则定义", ...],  // NEW: 权限标识
   snippets: { schema?: string, services?: string, pageComponent?: string },
   notes?: ["表格列可能是动态生成的，具体定义见页面组件代码。"],
   pageMeta?: {
@@ -158,6 +160,27 @@
 ---
 
 ## 特殊处理
+
+### Tab 结构（新增）
+
+如果 context 包含 `tabs` 数组（非空），`button-area.md` 必须生成 "Tab 切换" 章节：
+
+1. 在 `button-area.md` 的按钮清单之前，新增 "Tab 切换" 章节
+2. 每个 tab 占一行：`| 序号 | Tab 名称 | 对应内容 | 是否默认选中 |`
+3. **Tab 名称使用 `tabs.label` 原始值**，不要编造
+4. 如果 `tabs.label` 是变量引用（如 `ConfigTabsType.featureList`），直接使用该文本并标注 `[待确认]`
+5. 标注第一个 Tab 为默认选中
+
+如果 `tabs` 为空但页面确实有 Tab（从 snippets 中推断），也要生成该章节并标注 `[待确认]`。
+
+### 权限标识（新增）
+
+如果 context 包含 `permissions` 数组（非空），`button-area.md` 必须生成 "权限矩阵" 章节：
+
+1. 每个权限占一行：`| 权限标识 | 权限名称 | 控制的按钮/功能 |`
+2. **权限标识使用 `permissions` 数组中的原始值**
+3. 权限名称：如果标识是中文，直接作为名称；如果是英文/编码，推断中文含义并标注 `[待确认]`
+4. 控制的按钮/功能：根据标识名称和按钮清单推断
 
 ### 动态列
 
