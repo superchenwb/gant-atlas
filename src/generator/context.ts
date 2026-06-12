@@ -15,6 +15,8 @@ export interface CompactButton {
   element: string;
   line: number;
   onClick?: string;
+  /** API function names found in onClick handler body. */
+  apiCalls?: string[];
   disabled?: string;
   displayCondition?: string;
   /** Permission / auth / access / authority expression text. */
@@ -220,6 +222,7 @@ export function buildPageGenerationContext(
     element: b.element,
     line: b.line,
     onClick: b.onClick,
+    apiCalls: b.apiCalls,
     disabled: b.disabled,
     displayCondition: b.displayCondition,
     permission: b.permission,

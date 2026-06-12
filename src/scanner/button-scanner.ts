@@ -21,8 +21,12 @@ export interface ButtonCandidate {
   snippet: string;
   /** 1-based line number. */
   line: number;
+  /** Source file path where this button was found. */
+  filePath?: string;
   /** onClick handler expression text, if any. */
   onClick?: string;
+  /** API function names found in onClick handler body. */
+  apiCalls?: string[];
   /** disabled condition expression text, if any. */
   disabled?: string;
   /** display/visible condition expression text, if any. */
@@ -192,6 +196,23 @@ function collectButtonFromJsxElement(
     }
   }
 
+  // Extract API calls from onClick handler body
+  let apiCalls: string[] | undefined;
+  if (onClickAttr?.initializer) {
+    const foundApis = new Set<string>();
+    function findApiInNode(n: import('typescript').Node) {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
+        const name = n.expression.text;
+        if (name.endsWith('Api') && !foundApis.has(name)) {
+          foundApis.add(name);
+        }
+      }
+      ts.forEachChild(n, findApiInNode);
+    }
+    findApiInNode(onClickAttr.initializer);
+    if (foundApis.size > 0) apiCalls = Array.from(foundApis);
+  }
+
   return {
     name,
     element,
@@ -200,6 +221,7 @@ function collectButtonFromJsxElement(
     onClick: onClickAttr?.initializer
       ? extractAttributeValue(ts, onClickAttr.initializer)
       : undefined,
+    apiCalls,
     disabled: disabledAttr?.initializer
       ? extractAttributeValue(ts, disabledAttr.initializer)
       : undefined,
@@ -266,7 +288,10 @@ async function scanFile(filePath: string): Promise<PageButtonScanResult> {
     // JSX buttons
     if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
       const btn = collectButtonFromJsxElement(ts, sourceFile, node);
-      if (btn) buttons.push(btn);
+      if (btn) {
+        btn.filePath = filePath;
+        buttons.push(btn);
+      }
     }
 
     // Hooks
@@ -506,21 +531,29 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
     // Skip standard button elements
     if (BUTTON_ELEMENT_NAMES.has(btn.element) || !/[Bb]utton/.test(btn.element)) continue;
 
-    // Try to find the component source directory: e.g. AddButton -> addbutton/index.tsx
-    const componentDir = join(pageDir, btn.element.toLowerCase());
+    // Resolve source file: prefer element name convention, fallback to filePath
     let sourceFile: string | undefined;
+
+    // Primary: try element name → directory convention (e.g. AddButton → addbutton/index.tsx)
+    const componentDir = join(pageDir, btn.element.toLowerCase());
     for (const file of ['index.tsx', 'index.ts', `${btn.element}.tsx`, `${btn.element}.ts`]) {
       const candidate = join(componentDir, file);
       try {
-        const st = statSync(candidate);
-        if (st.isFile()) {
+        if (statSync(candidate).isFile()) {
           sourceFile = candidate;
           break;
         }
-      } catch {
-        // not found
-      }
+      } catch { /* not found */ }
     }
+
+    // Fallback: use filePath (where the button JSX was found)
+    if (!sourceFile && btn.filePath) {
+      try {
+        const st = statSync(btn.filePath);
+        if (st.isFile()) sourceFile = btn.filePath;
+      } catch { /* not found */ }
+    }
+
     if (!sourceFile) continue;
 
     try {
@@ -548,6 +581,10 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
         // Promote API calls to onClick hint if no onClick was captured
         if (!btn.onClick) {
           btn.onClick = Array.from(apis).join(', ');
+        }
+        // Also populate apiCalls for button→API mapping
+        if (!btn.apiCalls || btn.apiCalls.length === 0) {
+          btn.apiCalls = Array.from(apis);
         }
       }
 

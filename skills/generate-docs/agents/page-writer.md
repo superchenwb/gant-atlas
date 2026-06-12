@@ -126,6 +126,7 @@
   - 查询区模板：`{specRoot}/templates/page-main/search-area.md`
   - 按钮区模板：`{specRoot}/templates/page-main/button-area.md`
   - 表格区模板：`{specRoot}/templates/page-main/grid-area.md`
+  - 接口区模板：`{specRoot}/templates/page-main/api-area.md`
   - 其他功能模板：`{specRoot}/templates/page-main/other-features.md`
   - 规范文件：`{specRoot}/reference/page-main-spec.md`
 
@@ -205,6 +206,25 @@
 - 在 api-area.md 中单独列出这些 URL
 - 推断业务名称（如 `/custMbom/find` → "查询制造BOM主数据"）
 - 说明业务场景和触发时机
+
+### apiCalls（按钮→接口关联）
+
+如果 context 中的 `buttons` 包含 `apiCalls` 数组：
+- 在 `button-area.md` 的按钮清单中，将 `apiCalls` 作为按钮的"点击结果"列的主要内容
+- 在 `api-area.md` 的"接口与按钮关联"表格中填写映射关系
+- 如果按钮没有 `apiCalls`，但 onClick 文本中可以推断出 API 调用，手动补充并标注 `[待确认]`
+
+### apiScenarios（接口场景分类）
+
+如果 context 包含 `apiScenarios`：
+- 在 `api-area.md` 的接口清单中使用 `scenario` 字段进行分类
+- 按场景分组展示：查询类、保存类、删除类、导出类等
+- 未被任何按钮引用的 API 归入"页面初始化/查询"场景
+
+### 页面接口数量规则
+
+- `apis.length <= 5`：在 `main.md` 的接口链路章节中列出即可，不生成 `api-area.md`
+- `apis.length > 5`：**必须生成 `api-area.md`**，按场景分类展示
 
 ### 字段联动关系
 
