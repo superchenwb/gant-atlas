@@ -71,6 +71,10 @@ export interface PageGenerationContext {
   apis: string[];
   buttons: CompactButton[];
   hooks: CompactHook[];
+  /** Tab structure detected from page source (e.g. TabsButton items). */
+  tabs: Array<{ label: string; key: string }>;
+  /** Permission identifiers extracted from auth files. */
+  permissions: string[];
   snippets: {
     /** Full or truncated schema file content. */
     schema?: string;
@@ -265,6 +269,8 @@ export function buildPageGenerationContext(
     apiScenarios,
     buttons,
     hooks,
+    tabs: info.tabs,
+    permissions: info.permissions,
     snippets,
     notes: info.notes,
     pageMeta,
