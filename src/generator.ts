@@ -85,7 +85,8 @@ function generateMainMd(pageTitle: string, info: PageCodeInfo, routeMapping?: Ro
   lines.push('');
   lines.push('| 属性 | 内容 |');
   lines.push('|------|------|');
-  lines.push(`| 页面类型 | ${escapeMdCell('')} |`);
+  const pageType = info.pageType ?? inferPageTypeFromContent(info);
+  lines.push(`| 页面类型 | ${escapeMdCell(pageType ?? '')} |`);
   lines.push(`| 路径 | ${escapeMdCell(routeMapping?.path ?? '')} |`);
   lines.push(`| 页面功能 | ${escapeMdCell('')} |`);
   lines.push('');
@@ -196,8 +197,10 @@ function generateButtonAreaMd(buttons: ButtonCandidate[]): string {
  * Infer button scope from the component name or props.
  * Custom components like AddButton/RemoveButton are typically toolbar-level;
  * components with "Row" / "row" in name are row-level.
+ * ContextAction buttons are passed to Grid context and rendered as row actions.
  */
 function inferButtonScope(btn: ButtonCandidate): string {
+  if (btn.element === 'ContextAction') return '行级';
   const name = (btn.name ?? btn.element ?? '').toLowerCase();
   if (name.includes('row') || name.includes('行')) return '行级';
   if (name.includes('toolbar') || name.includes('工具栏')) return '页面';
@@ -210,6 +213,7 @@ function inferButtonScope(btn: ButtonCandidate): string {
  * Infer button position (toolbar / grid / header).
  */
 function inferButtonPosition(btn: ButtonCandidate): string {
+  if (btn.element === 'ContextAction') return 'grid';
   if (btn.element === 'ToolbarButton') return 'toolbar';
   // Standard Button in JSX is typically toolbar-level
   if (btn.element === 'Button' || btn.element === 'ActionButton') return 'toolbar';
@@ -225,3 +229,9 @@ const BUTTON_ELEMENT_NAMES = new Set([
   'a',
   'Link',
 ]);
+
+function inferPageTypeFromContent(info: PageCodeInfo): string | undefined {
+  if (info.columns.length > 0) return 'page-main';
+  if (info.fields.length > 0) return 'page-detail';
+  return undefined;
+}

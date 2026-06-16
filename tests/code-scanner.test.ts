@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { scanRoutes, scanSchema, scanServices, resolveComponentPath } from '../src/code-scanner.js';
+import {
+  scanRoutes,
+  scanSchema,
+  scanServices,
+  scanPageDir,
+  resolveComponentPath,
+} from '../src/code-scanner.js';
 import { join } from 'path';
 
 import { createStore } from '../src/store/sqlite.js';
@@ -119,12 +125,40 @@ describe('scanServices', () => {
     expect(apis.length).toBe(2);
   });
 
+  it('extracts API function names with both Api and API suffixes', async () => {
+    const servicesFile = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'action-callback-page', 'services.ts');
+    const apis = await scanServices(servicesFile);
+
+    expect(apis).toContain('deleteByIdAPI');
+    expect(apis).toContain('updateVehicleStatusAPI');
+    expect(apis.length).toBe(2);
+  });
+
   it('ignores non-Api suffixed functions', async () => {
     const servicesFile = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'simple-page', 'services.ts');
     const apis = await scanServices(servicesFile);
 
     expect(apis).not.toContain('helperFunction');
     expect(apis).not.toContain('DataAuthGroupFindListApi');
+  });
+});
+
+describe('scanPageDir', () => {
+  it('infers page-main for list pages with search fields and grid columns', async () => {
+    const pageDir = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'action-callback-page');
+    const info = await scanPageDir(pageDir, 'test-module', 'action-callback-page');
+
+    expect(info.pageType).toBe('page-main');
+    expect(info.fields.length).toBeGreaterThan(0);
+    expect(info.columns.length).toBeGreaterThan(0);
+  });
+
+  it('extracts APIs with both Api and API suffixes from services and hooks', async () => {
+    const pageDir = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'action-callback-page');
+    const info = await scanPageDir(pageDir, 'test-module', 'action-callback-page');
+
+    expect(info.apis).toContain('deleteByIdAPI');
+    expect(info.apis).toContain('updateVehicleStatusAPI');
   });
 });
 
