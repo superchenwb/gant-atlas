@@ -52,7 +52,7 @@ This file is the **project command center** for both AI agents and the human arc
 | T2 Sync CLI (runSync + sync 命令) | P0 | ✅ | 4 个 E2E 测试 |
 | T3 Skill 内 Hook (sync-page.mjs) | P0 | ✅ | skill 脚本存在 |
 | T3.5 拒绝 diff 后 stale 标记 | P0 | ✅ | 端到端测试 |
-| **T4 跨 repo / filesystem 手工验证** | **P0** | **⬜** | **人工验证（阻塞 Phase 2）** |
+| **T4 跨 repo / filesystem 手工验证** | **P0** | **✅** | **已在 yadea-bom bombasic/bommanage 跑通完整 Sync Hook 闭环（2026-06-16）** |
 | T5 Golden Eval 扩展 | P1 | ✅ | 2 个 golden 场景 |
 | T6 Consistency Check 增强 | P1 | ✅ | 11 项检查规则 |
 | T7 联邦查询层 | P2 | ✅ | 3 个测试 |
@@ -60,7 +60,17 @@ This file is the **project command center** for both AI agents and the human arc
 
 **测试总览**：36 个测试文件，242 个测试用例，全部通过。TypeScript strict 模式零错误。
 
-**阻塞项**：T4（在真实项目上跑通一次完整 Sync Hook 闭环）。
+**阻塞项**：无。Phase 1 全部完成，可进入 Phase 2 规划。
+
+**验证记录**：
+- 2026-06-16 在 yadea-bom `bombasic/bommanage` 页面跑通完整 Sync Hook：
+  - `generate` 生成 5 个 Markdown 文件 ✅
+  - `ingest` 导入 SQLite ✅
+  - 临时修改 `schema.ts`（"状态" → "车辆状态"）✅
+  - `sync` 正确检测到 search-area.md 和 grid-area.md 的字段/列变更 ✅
+  - `--apply-pending` 成功更新文档 ✅
+  - 恢复代码后，`sync` 再次检测到文档与代码不一致 ✅
+  - 已恢复 yadea-bom 源码，未留下任何变更 ✅
 
 ---
 
@@ -150,20 +160,19 @@ pnpm exec tsx src/index.ts sync --list-pending \
 ## 5. Roadmap
 
 ```
-Phase 1 (当前, 90%)         Phase 2 (2-4 月)           Phase 3 (4-6 月)
+Phase 1 (已完成 ✅)        Phase 2 (当前, 0%)         Phase 3 (4-6 月)
 ┌────────────────────┐    ┌────────────────────┐    ┌────────────────────┐
-│ ⬜ T4 手工验证       │    │ 多项目支持完善       │    │ Semantic Mapper    │
-│ ✅ 其他全部完成      │    │ CI 一致性校验        │    │   准确率 > 95%     │
-│                     │    │ 第 2 个试点项目接入   │    │ 跨项目影响分析      │
-│ 下一步:              │    │ 团队采用             │    │ 自动变更建议        │
-│ 在 yadea-bom 上     │    │                     │    │                    │
-│ 跑通完整闭环         │    │                     │    │                    │
+│ ✅ T1-T8 全部完成   │    │ ⬜ 多项目支持完善     │    │ Semantic Mapper    │
+│ ✅ 真实项目验证     │    │ ⬜ CI 一致性校验      │    │   准确率 > 95%     │
+│                     │    │ ⬜ 第 2 个试点项目接入 │    │ 跨项目影响分析      │
+│ 下一步:              │    │ ⬜ 团队采用           │    │ 自动变更建议        │
+│ 进入 Phase 2 规划   │    │                     │    │                    │
 └────────────────────┘    └────────────────────┘    └────────────────────┘
 ```
 
-**当前阻塞**：T4（在真实项目上手工验证 Sync Hook 闭环）。
+**当前状态**：Phase 1 已完成。T4 在 yadea-bom 上跑通完整 Sync Hook 闭环。
 
-**下一个里程碑**：T4 完成 → 提交所有代码 → 进入 Phase 2 规划。
+**下一个里程碑**：Phase 2 规划 — 多项目支持、CI 集成、第 2 个试点项目。
 
 ---
 
