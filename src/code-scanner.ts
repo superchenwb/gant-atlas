@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, basename, extname } from 'path';
+import { join, basename, extname, dirname } from 'path';
+import { homedir } from 'os';
 import type { Store } from './store/sqlite.js';
 import { scanPageButtons, type ButtonCandidate, type HookCandidate } from './scanner/button-scanner.js';
 
@@ -14,6 +15,14 @@ export interface SchemaField {
   title?: string;
   componentType?: string;
   options?: Record<string, unknown>;
+  required?: boolean | string;
+  placeholder?: string;
+  defaultValue?: unknown;
+  rules?: unknown;
+  /** Field names this field depends on (for dependency-driven visibility/validation). */
+  dependencies?: string[];
+  /** Raw source text of the onDependenciesChange handler (arrow function or function expression). */
+  onDependenciesChange?: string;
 }
 
 export interface SchemaColumn {
@@ -21,6 +30,12 @@ export interface SchemaColumn {
   title?: string;
   componentType?: string;
   options?: Record<string, unknown>;
+  width?: number | string;
+  minWidth?: number | string;
+  maxWidth?: number | string;
+  fixed?: string | boolean;
+  align?: string;
+  editable?: boolean | string;
 }
 
 export interface PageCodeInfo {
@@ -33,12 +48,16 @@ export interface PageCodeInfo {
   apis: string[];
   buttons: ButtonCandidate[];
   hooks: HookCandidate[];
+  tabs: Array<{ label: string; key: string }>;
+  permissions: string[];
   /** Path to the schema file actually used, if any */
   schemaFilePath?: string;
   /** Path to the services file actually used, if any */
   servicesFilePath?: string;
   /** Notes for the subagent (e.g. "columns are dynamically generated") */
   notes?: string[];
+  /** API URLs extracted from hook calls (e.g. '/custMbom/find') */
+  apiUrls?: string[];
 }
 
 export interface CodeToSpecMapping {
@@ -116,6 +135,15 @@ function extractStringLiteral(ts: typeof import('typescript'), node: import('typ
     if (ts.isStringLiteral(firstArg) || ts.isNoSubstitutionTemplateLiteral(firstArg)) {
       return firstArg.text;
     }
+  }
+  // Support conditional expression: condition ? 'A' : 'B'
+  if (ts.isConditionalExpression(node)) {
+    const whenTrue = extractStringLiteral(ts, node.whenTrue);
+    const whenFalse = extractStringLiteral(ts, node.whenFalse);
+    if (whenTrue && whenFalse) {
+      return `${whenTrue}|${whenFalse}`;
+    }
+    return whenTrue || whenFalse;
   }
   return undefined;
 }
@@ -233,7 +261,28 @@ export async function scanSchema(schemaFile: string): Promise<{
 
   // AST fallback always runs to supplement options and catch anything regex missed.
   // Regex provides a fast path for name/title/componentType; AST enriches with options.
-  return scanSchemaAST(raw, fields, columns);
+  const result = await scanSchemaAST(raw, fields, columns);
+
+  // Filename-based fallback for convention-based naming (e.g. mbomsearchschema/index.ts)
+  // When a file is conventionally named but uses export default or factory functions,
+  // regex/AST may fail. Use broader regex guided by the filename.
+  if (result.fields.length === 0 && /searchschema/i.test(schemaFile)) {
+    const propRegex = /(\w+):\s*\{[\s\S]*?title:\s*(?:tr\()?['"`]([^'"`]*)['"`][\s\S]*?componentType:\s*(?:tr\()?['"`]([^'"`]*)['"`]/g;
+    let pm: RegExpExecArray | null;
+    while ((pm = propRegex.exec(raw)) !== null) {
+      result.fields.push({ name: pm[1], title: pm[2], componentType: pm[3] });
+    }
+  }
+
+  if (result.columns.length === 0 && /gridschema/i.test(schemaFile)) {
+    const colRegex = /\{\s*fieldName:\s*['"`]([^'"`]+)['"`][\s\S]*?title:\s*tr\(['"`]([^'"`]+)['"`]\)/g;
+    let cm: RegExpExecArray | null;
+    while ((cm = colRegex.exec(raw)) !== null) {
+      result.columns.push({ fieldName: cm[1], title: cm[2] });
+    }
+  }
+
+  return result;
 }
 
 function extractOptionValue(ts: typeof import('typescript'), node: import('typescript').Node): unknown {
@@ -248,6 +297,38 @@ function extractOptionValue(ts: typeof import('typescript'), node: import('types
   if (ts.isArrayLiteralExpression(node)) {
     return node.elements.map((e) => extractOptionValue(ts, e)).filter((v) => v !== undefined);
   }
+  // Object literal: recursively extract key-value pairs
+  if (ts.isObjectLiteralExpression(node)) {
+    const obj: Record<string, unknown> = {};
+    for (const prop of node.properties) {
+      if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+        const val = extractOptionValue(ts, prop.initializer);
+        if (val !== undefined) {
+          obj[prop.name.text] = val;
+        } else {
+          // Fallback: preserve source text for complex expressions
+          obj[prop.name.text] = prop.initializer.getText?.() ?? '[complex]';
+        }
+      }
+    }
+    return obj;
+  }
+  // Function call: preserve the full call expression text (e.g. getCodeList('STATUS'))
+  if (ts.isCallExpression(node)) {
+    return node.getText?.() ?? '[call]';
+  }
+  // Template literal with expressions: preserve text
+  if (ts.isTemplateExpression(node) || ts.isTemplateLiteral(node)) {
+    return node.getText?.() ?? '[template]';
+  }
+  // Identifier: preserve name (e.g. imported constants)
+  if (ts.isIdentifier(node)) {
+    return node.text;
+  }
+  // Property access: preserve text (e.g. Constants.STATUS)
+  if (ts.isPropertyAccessExpression(node)) {
+    return node.getText?.() ?? '[property]';
+  }
   return undefined;
 }
 
@@ -258,10 +339,177 @@ function extractOptions(ts: typeof import('typescript'), node: import('typescrip
       const val = extractOptionValue(ts, prop.initializer);
       if (val !== undefined) {
         options[prop.name.text] = val;
+      } else {
+        // Preserve source text for expressions we can't parse (e.g. computed values)
+        const text = prop.initializer.getText?.();
+        if (text) options[prop.name.text] = text;
       }
     }
   }
   return options;
+}
+
+/**
+ * Recursively extract columns from a gridSchema array literal, including nested children.
+ */
+function extractColumnsFromArray(
+  ts: typeof import('typescript'),
+  arrayNode: import('typescript').ArrayLiteralExpression,
+  columns: SchemaColumn[]
+) {
+  for (const element of arrayNode.elements) {
+    let objNode: import('typescript').ObjectLiteralExpression | null = null;
+    let wrapperName: string | undefined;
+    let extraArgs: unknown[] | undefined;
+
+    // Direct object literal: { fieldName: '...', title: '...' }
+    if (ts.isObjectLiteralExpression(element)) {
+      objNode = element;
+    }
+    // Call expression wrapping: getCodeListColumn({ ... }, 'CODE_TYPE')
+    if (ts.isCallExpression(element) && element.arguments.length > 0 && ts.isObjectLiteralExpression(element.arguments[0])) {
+      objNode = element.arguments[0];
+      // Extract wrapper function name
+      if (ts.isIdentifier(element.expression)) {
+        wrapperName = element.expression.text;
+      } else if (ts.isPropertyAccessExpression(element.expression) && ts.isIdentifier(element.expression.name)) {
+        wrapperName = element.expression.name.text;
+      }
+      // Collect extra arguments (beyond the first object literal)
+      if (element.arguments.length > 1) {
+        extraArgs = [];
+        for (let i = 1; i < element.arguments.length; i++) {
+          const arg = element.arguments[i];
+          const val = extractOptionValue(ts, arg);
+          if (val !== undefined) {
+            extraArgs.push(val);
+          } else {
+            const text = arg.getText?.();
+            if (text) extraArgs.push(text);
+          }
+        }
+        if (extraArgs.length === 0) extraArgs = undefined;
+      }
+    }
+
+    if (!objNode) continue;
+    extractColumnFromObject(ts, objNode, columns, wrapperName, extraArgs);
+  }
+}
+
+/**
+ * Extract a single column (and its children) from an object literal node.
+ */
+function extractColumnFromObject(
+  ts: typeof import('typescript'),
+  objNode: import('typescript').ObjectLiteralExpression,
+  columns: SchemaColumn[],
+  wrapperName?: string,
+  extraArgs?: unknown[]
+) {
+  let fieldName: string | undefined;
+  let title: string | undefined;
+  let componentType: string | undefined;
+  let options: Record<string, unknown> | undefined;
+  let width: number | string | undefined;
+  let minWidth: number | string | undefined;
+  let maxWidth: number | string | undefined;
+  let fixed: string | boolean | undefined;
+  let align: string | undefined;
+  let editable: boolean | string | undefined;
+  let childrenArray: import('typescript').ArrayLiteralExpression | null = null;
+
+  for (const prop of objNode.properties) {
+    if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+      const propName = prop.name.text;
+      if (propName === 'fieldName') {
+        const val = extractStringLiteral(ts, prop.initializer);
+        if (val !== undefined) fieldName = val;
+      } else if (propName === 'title') {
+        const val = extractStringLiteral(ts, prop.initializer);
+        if (val !== undefined) title = val;
+      } else if (propName === 'componentType') {
+        const val = extractStringLiteral(ts, prop.initializer);
+        if (val !== undefined) componentType = val;
+      } else if (propName === 'options' && ts.isObjectLiteralExpression(prop.initializer)) {
+        options = extractOptions(ts, prop.initializer);
+      } else if (propName === 'children' && ts.isArrayLiteralExpression(prop.initializer)) {
+        childrenArray = prop.initializer;
+      } else if (propName === 'width') {
+        width = ts.isNumericLiteral(prop.initializer) ? Number(prop.initializer.text) : extractStringLiteral(ts, prop.initializer);
+      } else if (propName === 'minWidth') {
+        minWidth = ts.isNumericLiteral(prop.initializer) ? Number(prop.initializer.text) : extractStringLiteral(ts, prop.initializer);
+      } else if (propName === 'maxWidth') {
+        maxWidth = ts.isNumericLiteral(prop.initializer) ? Number(prop.initializer.text) : extractStringLiteral(ts, prop.initializer);
+      } else if (propName === 'fixed') {
+        if (prop.initializer.kind === ts.SyntaxKind.TrueKeyword) fixed = true;
+        else if (prop.initializer.kind === ts.SyntaxKind.FalseKeyword) fixed = false;
+        else fixed = extractStringLiteral(ts, prop.initializer);
+      } else if (propName === 'align') {
+        align = extractStringLiteral(ts, prop.initializer);
+      } else if (propName === 'editable') {
+        if (prop.initializer.kind === ts.SyntaxKind.TrueKeyword) editable = true;
+        else if (prop.initializer.kind === ts.SyntaxKind.FalseKeyword) editable = false;
+        else editable = prop.initializer.getText?.();
+      }
+    }
+  }
+
+  if (fieldName) {
+    // Merge wrapper/extra args into options
+    let mergedOptions = options;
+    if (wrapperName || (extraArgs && extraArgs.length > 0)) {
+      mergedOptions = { ...options };
+      if (wrapperName) mergedOptions._wrapper = wrapperName;
+      if (extraArgs && extraArgs.length > 0) mergedOptions._args = extraArgs;
+    }
+
+    const existingColumn = columns.find((c) => c.fieldName === fieldName);
+    if (existingColumn) {
+      if (title !== undefined) existingColumn.title = title;
+      if (componentType !== undefined) existingColumn.componentType = componentType;
+      if (mergedOptions !== undefined) existingColumn.options = mergedOptions;
+      if (width !== undefined) existingColumn.width = width;
+      if (minWidth !== undefined) existingColumn.minWidth = minWidth;
+      if (maxWidth !== undefined) existingColumn.maxWidth = maxWidth;
+      if (fixed !== undefined) existingColumn.fixed = fixed;
+      if (align !== undefined) existingColumn.align = align;
+      if (editable !== undefined) existingColumn.editable = editable;
+    } else {
+      columns.push({ fieldName, title, componentType, options: mergedOptions, width, minWidth, maxWidth, fixed, align, editable });
+    }
+  }
+
+  // Recursively extract children columns
+  if (childrenArray) {
+    extractColumnsFromArray(ts, childrenArray, columns);
+  }
+}
+
+/**
+ * Unwrap common wrappers around an array literal:
+ * - ArrayLiteralExpression → itself
+ * - CallExpression where callee is a property access on an array (e.g. arr.filter(...)) → the array
+ * - ArrowFunction / FunctionExpression body → unwrap recursively
+ * - AsExpression → unwrap recursively
+ */
+function unwrapArrayLiteral(
+  ts: typeof import('typescript'),
+  node: import('typescript').Node
+): import('typescript').ArrayLiteralExpression | undefined {
+  if (ts.isArrayLiteralExpression(node)) {
+    return node;
+  }
+  if (ts.isAsExpression(node)) {
+    return unwrapArrayLiteral(ts, node.expression);
+  }
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+    return unwrapArrayLiteral(ts, node.expression.expression);
+  }
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+    return unwrapArrayLiteral(ts, node.body);
+  }
+  return undefined;
 }
 
 async function scanSchemaAST(
@@ -278,94 +526,184 @@ async function scanSchemaAST(
   const fields = existingFields.length > 0 ? existingFields : [] as SchemaField[];
   const columns = existingColumns.length > 0 ? existingColumns : [] as SchemaColumn[];
 
+  // Phase 1: collect all array-literal variables so we can resolve spread elements
+  const arrayVars = new Map<string, import('typescript').ArrayLiteralExpression>();
+
+  function collect(node: import('typescript').Node) {
+    if (ts.isVariableStatement(node)) {
+      for (const decl of node.declarationList.declarations) {
+        if (ts.isIdentifier(decl.name) && decl.initializer) {
+          const arr = unwrapArrayLiteral(ts, decl.initializer);
+          if (arr) {
+            arrayVars.set(decl.name.text, arr);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, collect);
+  }
+  collect(sourceFile);
+
+  function extractSearchFieldsFromObject(objNode: import('typescript').ObjectLiteralExpression) {
+    for (const prop of objNode.properties) {
+      if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && ts.isObjectLiteralExpression(prop.initializer)) {
+        const propName = prop.name.text;
+        let title: string | undefined;
+        let componentType: string | undefined;
+        let options: Record<string, unknown> | undefined;
+        let required: boolean | string | undefined;
+        let placeholder: string | undefined;
+        let defaultValue: unknown;
+        let rules: unknown;
+        let dependencies: string[] | undefined;
+        let onDependenciesChange: string | undefined;
+
+        for (const innerProp of prop.initializer.properties) {
+          if (ts.isPropertyAssignment(innerProp) && ts.isIdentifier(innerProp.name)) {
+            const innerName = innerProp.name.text;
+            if (innerName === 'title') {
+              title = extractStringLiteral(ts, innerProp.initializer);
+            } else if (innerName === 'componentType') {
+              componentType = extractStringLiteral(ts, innerProp.initializer);
+            } else if (innerName === 'options' && ts.isObjectLiteralExpression(innerProp.initializer)) {
+              options = extractOptions(ts, innerProp.initializer);
+            } else if (innerName === 'required') {
+              if (innerProp.initializer.kind === ts.SyntaxKind.TrueKeyword) required = true;
+              else if (innerProp.initializer.kind === ts.SyntaxKind.FalseKeyword) required = false;
+              else required = innerProp.initializer.getText?.();
+            } else if (innerName === 'placeholder') {
+              placeholder = extractStringLiteral(ts, innerProp.initializer);
+            } else if (innerName === 'defaultValue') {
+              defaultValue = extractOptionValue(ts, innerProp.initializer);
+            } else if (innerName === 'rules') {
+              rules = extractOptionValue(ts, innerProp.initializer);
+            } else if (innerName === 'dependencies' && ts.isArrayLiteralExpression(innerProp.initializer)) {
+              dependencies = [];
+              for (const dep of innerProp.initializer.elements) {
+                const depStr = extractStringLiteral(ts, dep);
+                if (depStr) dependencies.push(depStr);
+              }
+              if (dependencies.length === 0) dependencies = undefined;
+            } else if (innerName === 'onDependenciesChange') {
+              // Preserve the raw source text of the handler for LLM interpretation
+              onDependenciesChange = innerProp.initializer.getText?.();
+            }
+          }
+        }
+
+        const existingField = fields.find((f) => f.name === propName);
+        if (existingField) {
+          if (title !== undefined) existingField.title = title;
+          if (componentType !== undefined) existingField.componentType = componentType;
+          if (options !== undefined) existingField.options = options;
+          if (required !== undefined) existingField.required = required;
+          if (placeholder !== undefined) existingField.placeholder = placeholder;
+          if (defaultValue !== undefined) existingField.defaultValue = defaultValue;
+          if (rules !== undefined) existingField.rules = rules;
+          if (dependencies !== undefined) existingField.dependencies = dependencies;
+          if (onDependenciesChange !== undefined) existingField.onDependenciesChange = onDependenciesChange;
+        } else {
+          fields.push({ name: propName, title, componentType, options, required, placeholder, defaultValue, rules, dependencies, onDependenciesChange });
+        }
+      }
+    }
+  }
+
+  function extractColumnsFromArrayWithSpreads(
+    ts: typeof import('typescript'),
+    arrayNode: import('typescript').ArrayLiteralExpression,
+    columns: SchemaColumn[]
+  ) {
+    for (const element of arrayNode.elements) {
+      // Direct object literal
+      if (ts.isObjectLiteralExpression(element)) {
+        extractColumnFromObject(ts, element, columns);
+        continue;
+      }
+      // Call expression wrapping: getCodeListColumn({ ... }, 'CODE_TYPE')
+      if (ts.isCallExpression(element) && element.arguments.length > 0 && ts.isObjectLiteralExpression(element.arguments[0])) {
+        let wrapperName: string | undefined;
+        if (ts.isIdentifier(element.expression)) wrapperName = element.expression.text;
+        else if (ts.isPropertyAccessExpression(element.expression) && ts.isIdentifier(element.expression.name)) {
+          wrapperName = element.expression.name.text;
+        }
+        let extraArgs: unknown[] | undefined;
+        if (element.arguments.length > 1) {
+          extraArgs = [];
+          for (let i = 1; i < element.arguments.length; i++) {
+            const arg = element.arguments[i];
+            const val = extractOptionValue(ts, arg);
+            if (val !== undefined) extraArgs.push(val);
+            else {
+              const text = arg.getText?.();
+              if (text) extraArgs.push(text);
+            }
+          }
+          if (extraArgs.length === 0) extraArgs = undefined;
+        }
+        extractColumnFromObject(ts, element.arguments[0], columns, wrapperName, extraArgs);
+        continue;
+      }
+      // Spread element referencing a known array variable
+      if (ts.isSpreadElement(element) && ts.isIdentifier(element.expression)) {
+        const spreadArr = arrayVars.get(element.expression.text);
+        if (spreadArr) {
+          extractColumnsFromArrayWithSpreads(ts, spreadArr, columns);
+        }
+        continue;
+      }
+    }
+  }
+
   function visit(node: import('typescript').Node) {
     if (ts.isVariableStatement(node)) {
       for (const decl of node.declarationList.declarations) {
         // searchSchema = { ... }
         if (ts.isIdentifier(decl.name) && decl.name.text === 'searchSchema' && decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
-          for (const prop of decl.initializer.properties) {
-            if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && ts.isObjectLiteralExpression(prop.initializer)) {
-              const propName = prop.name.text;
-              let title: string | undefined;
-              let componentType: string | undefined;
-              let options: Record<string, unknown> | undefined;
+          extractSearchFieldsFromObject(decl.initializer);
+        }
 
-              for (const innerProp of prop.initializer.properties) {
-                if (ts.isPropertyAssignment(innerProp) && ts.isIdentifier(innerProp.name)) {
-                  if (innerProp.name.text === 'title') {
-                    title = extractStringLiteral(ts, innerProp.initializer);
-                  } else if (innerProp.name.text === 'componentType') {
-                    componentType = extractStringLiteral(ts, innerProp.initializer);
-                  } else if (innerProp.name.text === 'options' && ts.isObjectLiteralExpression(innerProp.initializer)) {
-                    options = extractOptions(ts, innerProp.initializer);
-                  }
-                }
-              }
-
-              const existingField = fields.find((f) => f.name === propName);
-              if (existingField) {
-                if (title !== undefined) existingField.title = title;
-                if (componentType !== undefined) existingField.componentType = componentType;
-                if (options !== undefined) existingField.options = options;
-              } else {
-                fields.push({ name: propName, title, componentType, options });
-              }
-            }
-          }
+        // Support *SearchSchema naming convention (e.g. mbomSearchSchema)
+        if (ts.isIdentifier(decl.name) && /searchschema$/i.test(decl.name.text) && decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
+          extractSearchFieldsFromObject(decl.initializer);
         }
 
         // gridSchema = [ ... ]
-        if (ts.isIdentifier(decl.name) && decl.name.text === 'gridSchema' && decl.initializer && ts.isArrayLiteralExpression(decl.initializer)) {
-          for (const element of decl.initializer.elements) {
-            let objNode: import('typescript').ObjectLiteralExpression | null = null;
+        if (ts.isIdentifier(decl.name) && decl.name.text === 'gridSchema' && decl.initializer) {
+          const arr = unwrapArrayLiteral(ts, decl.initializer);
+          if (arr) extractColumnsFromArrayWithSpreads(ts, arr, columns);
+        }
 
-            // Direct object literal: { fieldName: '...', title: '...' }
-            if (ts.isObjectLiteralExpression(element)) {
-              objNode = element;
-            }
-            // Call expression wrapping: getCodeListColumn({ ... }) or getLevelColumn({ ... })
-            if (ts.isCallExpression(element) && element.arguments.length > 0 && ts.isObjectLiteralExpression(element.arguments[0])) {
-              objNode = element.arguments[0];
-            }
+        // Support *GridSchema naming convention (e.g. mbomBaseGridSchema)
+        if (ts.isIdentifier(decl.name) && /gridschema$/i.test(decl.name.text) && decl.initializer) {
+          const arr = unwrapArrayLiteral(ts, decl.initializer);
+          if (arr) extractColumnsFromArrayWithSpreads(ts, arr, columns);
+        }
 
-            if (!objNode) continue;
-
-            let fieldName: string | undefined;
-            let title: string | undefined;
-            let componentType: string | undefined;
-            let options: Record<string, unknown> | undefined;
-
-            for (const prop of objNode.properties) {
-              if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
-                if (prop.name.text === 'fieldName') {
-                  const val = extractStringLiteral(ts, prop.initializer);
-                  if (val !== undefined) fieldName = val;
-                } else if (prop.name.text === 'title') {
-                  const val = extractStringLiteral(ts, prop.initializer);
-                  if (val !== undefined) title = val;
-                } else if (prop.name.text === 'componentType') {
-                  const val = extractStringLiteral(ts, prop.initializer);
-                  if (val !== undefined) componentType = val;
-                } else if (prop.name.text === 'options' && ts.isObjectLiteralExpression(prop.initializer)) {
-                  options = extractOptions(ts, prop.initializer);
-                }
-              }
-            }
-
-            if (fieldName) {
-              const existingColumn = columns.find((c) => c.fieldName === fieldName);
-              if (existingColumn) {
-                if (title !== undefined) existingColumn.title = title;
-                if (componentType !== undefined) existingColumn.componentType = componentType;
-                if (options !== undefined) existingColumn.options = options;
-              } else {
-                columns.push({ fieldName, title, componentType, options });
-              }
-            }
-          }
+        // Support any arrow/function whose name ends with Schema and body is an array
+        if (ts.isIdentifier(decl.name) && /schema$/i.test(decl.name.text) && decl.initializer) {
+          const arr = unwrapArrayLiteral(ts, decl.initializer);
+          if (arr) extractColumnsFromArrayWithSpreads(ts, arr, columns);
         }
       }
     }
+
+    // Handle export default { ... } or export default [...]
+    if (ts.isExportAssignment(node) && node.expression) {
+      let expr = node.expression;
+      // unwrap `as Type` expressions
+      if (ts.isAsExpression(expr)) {
+        expr = expr.expression;
+      }
+
+      if (ts.isObjectLiteralExpression(expr)) {
+        extractSearchFieldsFromObject(expr);
+      }
+
+      const arr = unwrapArrayLiteral(ts, expr);
+      if (arr) extractColumnsFromArrayWithSpreads(ts, arr, columns);
+    }
+
     ts.forEachChild(node, visit);
   }
 
@@ -573,9 +911,308 @@ function detectDynamicColumns(content: string): string | undefined {
 }
 
 /**
+ * Recursively scan a directory for API definitions in all .ts/.tsx files.
+ */
+async function scanServicesRecursive(dir: string): Promise<string[]> {
+  const apis: string[] = [];
+  const seen = new Set<string>();
+
+  function walk(currentDir: string) {
+    let entries: string[];
+    try {
+      entries = readdirSync(currentDir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = join(currentDir, entry);
+      let stat: import('fs').Stats;
+      try {
+        stat = statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        walk(fullPath);
+      } else if (stat.isFile()) {
+        const ext = extname(entry);
+        if (ext === '.ts' || ext === '.tsx') {
+          try {
+            const fileApis = scanServicesFile(fullPath);
+            for (const api of fileApis) {
+              if (!seen.has(api)) {
+                seen.add(api);
+                apis.push(api);
+              }
+            }
+          } catch {
+            // skip unreadable files
+          }
+        }
+      }
+    }
+  }
+
+  walk(dir);
+  return apis;
+}
+
+/**
+ * Find the main component file in a page directory (index.tsx or index.ts).
+ */
+function findMainComponentFile(pageDir: string): string | undefined {
+  for (const name of ['index.tsx', 'index.ts']) {
+    const fullPath = join(pageDir, name);
+    try {
+      if (statSync(fullPath).isFile()) return fullPath;
+    } catch {
+      // continue
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a path-alias import to an actual filesystem path.
+ */
+function resolveAliasPath(importPath: string, pathAliases: Record<string, string>, codeDir: string): string | undefined {
+  for (const [alias, target] of Object.entries(pathAliases)) {
+    const normalizedAlias = alias.replace(/\/$/, '');
+    if (importPath.startsWith(normalizedAlias)) {
+      const relativePath = importPath.slice(normalizedAlias.length);
+      const normalizedTarget = target.replace(/\/$/, '');
+
+      // Primary: resolve relative to codeDir
+      let resolved = join(codeDir, normalizedTarget, relativePath);
+      try {
+        const st = statSync(resolved);
+        if (st.isDirectory() || st.isFile()) {
+          return resolved;
+        }
+      } catch {
+        // Fallback: try resolving from ancestor directories (handle monorepo
+        // setups where pathAliases are relative to repo root but codeDir is
+        // a nested package src directory)
+        let currentDir = codeDir;
+        while (currentDir !== dirname(currentDir)) {
+          currentDir = dirname(currentDir);
+          resolved = join(currentDir, normalizedTarget, relativePath);
+          try {
+            const st = statSync(resolved);
+            if (st.isDirectory() || st.isFile()) {
+              return resolved;
+            }
+          } catch {
+            // continue
+          }
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Given a barrel export file, find all schema definition files
+ * by resolving each relative import to an actual file.
+ */
+function findSchemaFilesInBarrel(barrelContent: string, dir: string): string[] {
+  const files: string[] = [];
+  const regex = /from\s+['"](\.\/[^'"]+)['"]/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(barrelContent)) !== null) {
+    const relPath = m[1];
+    const candidates = [
+      join(dir, relPath, 'index.ts'),
+      join(dir, relPath) + '.ts',
+      join(dir, relPath) + '.tsx',
+    ];
+    for (const candidate of candidates) {
+      try {
+        if (statSync(candidate).isFile()) {
+          files.push(candidate);
+          break;
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+  return files;
+}
+
+/**
+ * Resolve external schema files imported by the page component.
+ * Returns an array of schema file paths if found, undefined otherwise.
+ */
+function resolveExternalSchema(
+  pageDir: string,
+  codeDir: string | undefined,
+  pathAliases: Record<string, string> | undefined
+): string[] | undefined {
+  if (!codeDir || !pathAliases) return undefined;
+
+  const mainFile = findMainComponentFile(pageDir);
+  if (!mainFile) return undefined;
+
+  const content = tryReadFile(mainFile);
+  if (!content) return undefined;
+
+  // Look for schema imports
+  const importRegex = /import\s*\{([^}]+)\}\s*from\s+['"]([^'"]+)['"]/g;
+  let match: RegExpExecArray | null;
+  let schemaImportPath: string | undefined;
+
+  while ((match = importRegex.exec(content)) !== null) {
+    const importedNames = match[1];
+    const importPath = match[2];
+    if (/(?:search|grid|column|form)schema\b/i.test(importedNames)) {
+      // Only consider imports from paths that look like schema definitions
+      if (importPath.includes('/schema/') || importPath.includes('schema')) {
+        schemaImportPath = importPath;
+        break;
+      }
+    }
+  }
+
+  if (!schemaImportPath) return undefined;
+
+  const resolvedPath = resolveAliasPath(schemaImportPath, pathAliases, codeDir);
+  if (!resolvedPath) return undefined;
+
+  // Try barrel export first
+  const barrelFile = join(resolvedPath, 'index.ts');
+  try {
+    if (statSync(barrelFile).isFile()) {
+      const barrelContent = readFileSync(barrelFile, 'utf-8');
+      const barrelFiles = findSchemaFilesInBarrel(barrelContent, resolvedPath);
+      if (barrelFiles.length > 0) return barrelFiles;
+      // If barrel contains schema definitions directly, use it
+      if (/\b(?:export\s+)?(?:const|let|var)\s+(?:search|grid|column|form)schema\b/i.test(barrelContent)) {
+        return [barrelFile];
+      }
+    }
+  } catch {
+    // not a barrel export
+  }
+
+  // Try direct file
+  const directFiles: string[] = [];
+  try {
+    if (statSync(resolvedPath + '.ts').isFile()) directFiles.push(resolvedPath + '.ts');
+  } catch { /* continue */ }
+  try {
+    if (statSync(resolvedPath + '.tsx').isFile()) directFiles.push(resolvedPath + '.tsx');
+  } catch { /* continue */ }
+
+  return directFiles.length > 0 ? directFiles : undefined;
+}
+
+/**
+ * Extract API URLs from hook calls in a page component file.
+ * Uses TypeScript AST to find useXxx(...) calls and extract string literal arguments.
+ */
+async function extractHookApiUrls(filePath: string): Promise<string[]> {
+  const raw = tryReadFile(filePath);
+  if (!raw) return [];
+
+  const ts = await import('typescript');
+  const isTsx = extname(filePath) === '.tsx';
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    raw,
+    ts.ScriptTarget.Latest,
+    true,
+    isTsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  function visit(node: import('typescript').Node) {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text.startsWith('use')) {
+      for (const arg of node.arguments) {
+        if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) {
+          const text = arg.text;
+          if (text.startsWith('/') && !seen.has(text)) {
+            seen.add(text);
+            urls.push(text);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return urls;
+}
+
+/**
+ * Resolve external hook APIs by scanning hook directories referenced in imports.
+ */
+async function resolveExternalHookApis(
+  pageDir: string,
+  codeDir: string | undefined,
+  pathAliases: Record<string, string> | undefined
+): Promise<string[]> {
+  if (!codeDir || !pathAliases) return [];
+
+  const mainFile = findMainComponentFile(pageDir);
+  if (!mainFile) return [];
+
+  const content = tryReadFile(mainFile);
+  if (!content) return [];
+
+  const apis: string[] = [];
+  const seen = new Set<string>();
+
+  const importRegex = /import\s*\{([^}]+)\}\s*from\s+['"]([^'"]+)['"]/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = importRegex.exec(content)) !== null) {
+    const importedNames = match[1];
+    const importPath = match[2];
+
+    if (!/\buse[A-Z]\w+\b/.test(importedNames)) continue;
+
+    const resolvedPath = resolveAliasPath(importPath, pathAliases, codeDir);
+    if (!resolvedPath) continue;
+
+    let hookDir = resolvedPath;
+    try {
+      if (!statSync(resolvedPath).isDirectory()) {
+        hookDir = dirname(resolvedPath);
+      }
+    } catch {
+      continue;
+    }
+
+    const hookApis = await scanServicesRecursive(hookDir);
+    for (const api of hookApis) {
+      if (!seen.has(api)) {
+        seen.add(api);
+        apis.push(api);
+      }
+    }
+  }
+
+  return apis;
+}
+
+/**
  * 扫描单个页面代码目录
  */
-export async function scanPageDir(pageDir: string, module: string, pageName: string): Promise<PageCodeInfo> {
+export async function scanPageDir(
+  pageDir: string,
+  module: string,
+  pageName: string,
+  options?: {
+    codeDir?: string;
+    pathAliases?: Record<string, string>;
+  }
+): Promise<PageCodeInfo> {
   const info: PageCodeInfo = {
     pageDir,
     module,
@@ -585,6 +1222,8 @@ export async function scanPageDir(pageDir: string, module: string, pageName: str
     apis: [],
     buttons: [],
     hooks: [],
+    tabs: [],
+    permissions: [],
   };
 
   // Detect file roles by content patterns (not hardcoded names)
@@ -601,6 +1240,23 @@ export async function scanPageDir(pageDir: string, module: string, pageName: str
     }
   }
 
+  // If no local schema found, try resolving external schema via imports
+  if (info.fields.length === 0 && info.columns.length === 0) {
+    const externalSchemas = resolveExternalSchema(pageDir, options?.codeDir, options?.pathAliases);
+    if (externalSchemas && externalSchemas.length > 0) {
+      info.schemaFilePath = externalSchemas[0];
+      for (const schemaFile of externalSchemas) {
+        try {
+          const schema = await scanSchema(schemaFile);
+          info.fields.push(...schema.fields);
+          info.columns.push(...schema.columns);
+        } catch {
+          // External schema exists but could not be parsed
+        }
+      }
+    }
+  }
+
   if (roles.servicesFile) {
     info.servicesFilePath = roles.servicesFile;
     try {
@@ -610,9 +1266,40 @@ export async function scanPageDir(pageDir: string, module: string, pageName: str
     }
   }
 
+  // Also recursively scan sub-directories for scattered API definitions
+  const recursiveApis = await scanServicesRecursive(pageDir);
+  for (const api of recursiveApis) {
+    if (!info.apis.includes(api)) {
+      info.apis.push(api);
+    }
+  }
+
   const buttonScan = await scanPageButtons(pageDir);
   info.buttons = buttonScan.buttons;
   info.hooks = buttonScan.hooks;
+  info.tabs = buttonScan.tabs;
+  info.permissions = buttonScan.permissions;
+
+  // Extract API URLs from hook calls in the main component file
+  const mainFile = findMainComponentFile(pageDir);
+  if (mainFile) {
+    try {
+      const hookUrls = await extractHookApiUrls(mainFile);
+      if (hookUrls.length > 0) {
+        info.apiUrls = hookUrls;
+      }
+    } catch {
+      // ignore extraction errors
+    }
+  }
+
+  // Scan external hook directories for API definitions
+  const externalHookApis = await resolveExternalHookApis(pageDir, options?.codeDir, options?.pathAliases);
+  for (const api of externalHookApis) {
+    if (!info.apis.includes(api)) {
+      info.apis.push(api);
+    }
+  }
 
   // Detect dynamic columns if static schema yielded none
   if (info.columns.length === 0) {
@@ -809,27 +1496,81 @@ export async function buildMapping(
 }
 
 /**
+ * 从全局 ~/.gant-atlas/projects.json 加载项目配置中的 pathAliases。
+ * 支持两种 JSON 结构：{ projects: [...] } 或 [...]。
+ */
+export function loadPathAliases(codeDir: string): Record<string, string> {
+  try {
+    const projectsPath = join(homedir(), '.gant-atlas', 'projects.json');
+    if (!statSync(projectsPath).isFile()) return {};
+
+    const raw = readFileSync(projectsPath, 'utf-8');
+    const data = JSON.parse(raw) as { projects?: unknown[] } | unknown[];
+    const projects = Array.isArray(data) ? data : (data.projects ?? []);
+
+    const project = projects.find((p: unknown) => {
+      if (!p || typeof p !== 'object') return false;
+      const { codeDir: pDir } = p as { codeDir?: string };
+      if (typeof pDir !== 'string') return false;
+      return (
+        codeDir === pDir ||
+        codeDir.startsWith(pDir + '/') ||
+        pDir.startsWith(codeDir + '/')
+      );
+    });
+
+    if (
+      project &&
+      typeof project === 'object' &&
+      'pathAliases' in project &&
+      project.pathAliases &&
+      typeof project.pathAliases === 'object'
+    ) {
+      return project.pathAliases as Record<string, string>;
+    }
+  } catch {
+    // Ignore missing or malformed config
+  }
+  return {};
+}
+
+/**
  * 解析组件路径别名到实际路径
  * 例如 @bombusiness/dataauthgroup → codeDir/bombusiness/dataauthgroup
+ *
+ * 解析策略：
+ * 1. 优先使用 ~/.gant-atlas/projects.json 中配置的 pathAliases
+ * 2. 回退到 legacy 行为：去掉 @/@@/ibom 前缀后直接拼接
  */
-function resolveComponentPath(component: string, codeDir: string): string | null {
-  // Remove leading @ or @@ aliases
+export function resolveComponentPath(component: string, codeDir: string): string | null {
+  const aliases = loadPathAliases(codeDir);
+  const sortedAliases = Object.entries(aliases).sort((a, b) => b[0].length - a[0].length);
+
+  for (const [prefix, base] of sortedAliases) {
+    if (component.startsWith(prefix)) {
+      const fullPath = join(codeDir, base, component.slice(prefix.length));
+      try {
+        if (statSync(fullPath).isDirectory()) return fullPath;
+      } catch {
+        // Not found under this alias
+      }
+    }
+  }
+
+  // Legacy fallback
   let cleanPath = component.replace(/^@+/, '');
-  // Remove ibom/src/ or ibom/ prefix if present
   cleanPath = cleanPath.replace(/^ibom(?:\/src)?\//, '');
   const fullPath = join(codeDir, cleanPath);
 
   try {
-    const stat = statSync(fullPath);
-    if (stat.isDirectory()) return fullPath;
+    const st = statSync(fullPath);
+    if (st.isDirectory()) return fullPath;
   } catch {
     // Not found
   }
 
   return null;
 }
-
-export { resolveComponentPath };
 
 // ─── Phase 1: Component + Service scanning enhancements ───
 

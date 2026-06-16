@@ -1,0 +1,25 @@
+{
+  "searchFields": [
+    { "name": "materialCode", "title": "物料编码", "componentType": "Input" },
+    { "name": "status", "title": "状态", "componentType": "CodeList" },
+    { "name": "createDate", "title": "创建日期", "componentType": "DatePicker" },
+    { "name": "dateRange", "title": "日期范围", "componentType": "RangePicker" },
+    { "name": "orgId", "title": "组织", "componentType": "TreeSelect" },
+    { "name": "userId", "title": "负责人", "componentType": "UserSelect" },
+    { "name": "supplierId", "title": "供应商", "componentType": "LoupeSelect" },
+    { "name": "keyword", "title": "关键词", "componentType": "AutoComplete" },
+    { "name": "unknownField", "title": "未知组件", "componentType": "Input" },
+    { "name": "changeStage", "title": "变更阶段", "componentType": "CodeList" },
+    { "name": "createDateStart", "title": "创建日期起", "componentType": "DatePicker" }
+  ],
+  "gridColumns": [
+    { "fieldName": "materialCode", "title": "物料编码" },
+    { "fieldName": "status", "title": "状态" },
+    { "fieldName": "createDate", "title": "创建日期" }
+  ],
+  "buttons": [],
+  "apis": [],
+  "hooks": [],
+  "tabs": [],
+  "permissions": []
+}

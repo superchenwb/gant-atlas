@@ -16,6 +16,10 @@ describe('generatePageSkeleton', () => {
       { fieldName: 'status', title: '状态标签' },
     ],
     apis: ['simplePageFindListApi', 'simplePageSaveApi'],
+    buttons: [],
+    hooks: [],
+    tabs: [],
+    permissions: [],
   };
 
   it('generates main.md with title from route', () => {
@@ -43,14 +47,14 @@ describe('generatePageSkeleton', () => {
     expect(skeleton.searchAreaMd).toContain('| 状态 | status | Select | | |');
   });
 
-  it('marks unknown componentType as Input [需确认]', () => {
+  it('marks unknown componentType as Input', () => {
     const info: PageCodeInfo = {
       ...baseInfo,
       fields: [{ name: 'unknownField', title: '未知字段' }],
     };
     const skeleton = generatePageSkeleton(info);
 
-    expect(skeleton.searchAreaMd).toContain('| 未知字段 | unknownField | Input [需确认] | | |');
+    expect(skeleton.searchAreaMd).toContain('| 未知字段 | unknownField | Input | | |');
   });
 
   it('generates grid-area.md with columns', () => {
@@ -80,6 +84,22 @@ describe('generatePageSkeleton', () => {
 
     expect(skeleton.buttonAreaMd).toContain('## 按钮区域');
     expect(skeleton.buttonAreaMd).toContain('| 按钮名称 | 作用域 | 位置 | 显示条件 | 禁用条件 | 点击结果 | 确认弹窗 |');
+  });
+
+  it('generates api-area.md with API list and button associations', () => {
+    const skeleton = generatePageSkeleton(baseInfo);
+
+    expect(skeleton.apiAreaMd).toContain('# 接口区域');
+    expect(skeleton.apiAreaMd).toContain('## 一、接口清单');
+    expect(skeleton.apiAreaMd).toContain('| simplePageFindListApi | 查询 | |');
+    expect(skeleton.apiAreaMd).toContain('| simplePageSaveApi | 保存 | |');
+  });
+
+  it('skips empty api-area when no APIs and no button API calls', () => {
+    const info: PageCodeInfo = { ...baseInfo, apis: [], buttons: [] };
+    const skeleton = generatePageSkeleton(info);
+
+    expect(skeleton.apiAreaMd).toBe('');
   });
 
   it('escapes pipe characters in cell text', () => {

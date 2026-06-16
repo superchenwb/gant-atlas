@@ -182,21 +182,47 @@ export function migrate(
     )
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS __migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    )
+  `);
+
   const versionRow = db.prepare("SELECT version FROM __version WHERE key = 'schema'").get() as
     | { version: number }
     | undefined;
   let currentVersion = versionRow?.version ?? 0;
 
-  const pending = migrationsToRun
-    .filter((m) => m.version > currentVersion && m.version <= targetVersion)
-    .sort((a, b) => a.version - b.version);
+  if (targetVersion > currentVersion) {
+    const pending = migrationsToRun
+      .filter((m) => m.version > currentVersion && m.version <= targetVersion)
+      .sort((a, b) => a.version - b.version);
 
-  // Note: production deployments should manually backup before running migrations.
-  // Auto-backup was removed because it caused race conditions in parallel test runners.
+    // Note: production deployments should manually backup before running migrations.
+    // Auto-backup was removed because it caused race conditions in parallel test runners.
 
-  for (const m of pending) {
-    m.up(db);
-    currentVersion = m.version;
+    for (const m of pending) {
+      m.up(db);
+      db.prepare(
+        `INSERT OR REPLACE INTO __migrations (version, name, applied_at) VALUES (?, ?, ?)`
+      ).run(m.version, m.name, new Date().toISOString());
+      currentVersion = m.version;
+    }
+  } else if (targetVersion < currentVersion) {
+    // Downgrade path: run down migrations in reverse order.
+    const toRevert = migrationsToRun
+      .filter((m) => m.version <= currentVersion && m.version > targetVersion)
+      .sort((a, b) => b.version - a.version);
+
+    for (const m of toRevert) {
+      if (m.down) {
+        m.down(db);
+      }
+      db.prepare('DELETE FROM __migrations WHERE version = ?').run(m.version);
+      currentVersion = m.version - 1;
+    }
   }
 
   db.prepare("INSERT OR REPLACE INTO __version (key, version) VALUES ('schema', ?)").run(

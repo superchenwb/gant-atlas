@@ -1,96 +1,113 @@
 ---
 name: gant-atlas-generate
-description: Generate complete feature-doc Markdown files from source code using subagent batching
+description: 从源代码生成完整的 feature-doc Markdown 文件，严格遵循内置 prompts/ 规范
 argument-hint: ["[project-id] [--module <module>] [--page <pageId>] [--full]"]
 ---
 
 # /gant-atlas-generate
 
-Generate semantically complete feature-doc Markdown files for one or more pages.
+从源代码语义扫描生成完整的 feature-doc Markdown 文件。
 
-This skill uses deterministic code scanning (routes, schema, APIs, buttons, hooks)
-plus subagent writers to produce `feature-docs/<module>/<page>/*.md`.
+本技能结合确定性代码扫描（路由、schema、API、按钮、Hook）与子 Agent 写作，产出严格遵循内置 `prompts/` 规范的 `feature-docs/<module>/<page>/*.md`。
 
-## Options
+## 选项
 
-`$ARGUMENTS` may contain:
+`$ARGUMENTS` 可包含：
 
-- `project-id` — project identifier configured in the global projects.json
-- `--module <module>` — generate only pages under this module
-- `--page <pageId>` — generate only a single page (format: `module/pageName`)
-- `--full` — force a full rebuild, ignoring incremental hashes
+- `project-id` — 全局 `projects.json` 中配置的项目标识
+- `--module <module>` — 只生成该模块下的页面
+- `--page <pageId>` — 只生成单个页面（格式：`module/pageName`）
+- `--full` — 强制全量重建，忽略增量哈希
 
-## Progress reporting
+## 进度报告
 
-Report progress at each phase:
+每个阶段报告进度：
 
-> `[Phase 0/7] Resolving project configuration...`
-> `[Phase 1/7] Scanning pages from routes...`
-> `[Phase 1.5/7] Filtering unchanged pages...`
-> `[Phase 2/7] Extracting page contexts (page N/M)...`
-> `[Phase 3/7] Writing Markdown via subagents (batch N/B)...`
-> `[Phase 4/7] Merging generated docs...`
-> `[Phase 5/7] Reviewing output...`
-> `[Phase 6/7] Saving meta and report...`
-
----
-
-## Phase 0 — Pre-flight
-
-1. **Resolve plugin root.**
-
-   The skill files live inside the gant-atlas repo. Try these candidates:
-
-   ```bash
-   PLUGIN_ROOT=""
-   for candidate in \
-     "${GANT_ATLAS_PLUGIN_ROOT}" \
-     "$HOME/gant-atlas" \
-     "$HOME/.gant-atlas/plugin" \
-     "$(dirname $(realpath ~/.claude/skills/gant-atlas-generate 2>/dev/null))/../../..";
-   do
-     if [ -n "$candidate" ] && [ -f "$candidate/package.json" ] && [ -d "$candidate/skills/generate-docs" ]; then
-       PLUGIN_ROOT="$candidate"
-       break
-     fi
-   done
-   ```
-
-2. **Ensure the compiled core exists.**
-
-   ```bash
-   if [ ! -f "$PLUGIN_ROOT/dist/code-scanner.js" ] || [ ! -f "$PLUGIN_ROOT/dist/generator/context.js" ]; then
-     cd "$PLUGIN_ROOT" && pnpm install --frozen-lockfile && pnpm run build
-   fi
-   ```
-
-3. **Resolve project config.**
-
-   Read `~/.gant-atlas/projects.json` and find the project matching the first non-flag argument.
-   Required fields: `id`, `docsPath`. Optional: `codeDir`, `routesFile`.
-
-   If no project id is given, error: "Please provide a project id."
-
-4. **Create intermediate directories.**
-
-   ```bash
-   PROJECT_ROOT=$(dirname "$docsPath")  # or docsPath itself
-   mkdir -p "$PROJECT_ROOT/.gant-atlas/intermediate/generate"
-   mkdir -p "$PROJECT_ROOT/.gant-atlas/tmp"
-   ```
-
-   Store paths as:
-   - `$INTERMEDIATE = $PROJECT_ROOT/.gant-atlas/intermediate/generate`
-   - `$TMP = $PROJECT_ROOT/.gant-atlas/tmp`
-   - `$META = $PROJECT_ROOT/.gant-atlas/generate-meta.json` (persistent across runs)
+> `[阶段 0/7] 解析项目配置与规范...`
+> `[阶段 1/7] 从路由扫描页面...`
+> `[阶段 1.5/7] 过滤未变更页面...`
+> `[阶段 2/7] 提取页面上下文（第 N/M 页）...`
+> `[阶段 3/7] 通过子 Agent 写入 Markdown（第 N/B 批）...`
+> `[阶段 3.5/7] Sync Hook：对比代码与清单差异...`
+> `[阶段 4/7] 合并生成的文档...`
+> `[阶段 5/7] 审阅输出...`
+> `[阶段 6/7] 保存元数据与报告...`
 
 ---
 
-## Phase 1 — Scan pages
+## 阶段 0 — 预检
 
-Report: `[Phase 1/7] Scanning pages from routes...`
+### 0.1 解析插件根目录
 
-Run the bundled scanner:
+技能文件位于 gant-atlas 仓库内。依次尝试以下候选：
+
+```bash
+PLUGIN_ROOT=""
+for candidate in \
+  "${GANT_ATLAS_PLUGIN_ROOT}" \
+  "$HOME/gant-atlas" \
+  "$HOME/.gant-atlas/plugin" \
+  "$(dirname $(realpath ~/.claude/skills/gant-atlas-generate 2>/dev/null))/../../..";
+do
+  if [ -n "$candidate" ] && [ -f "$candidate/package.json" ] && [ -d "$candidate/skills/generate-docs" ]; then
+    PLUGIN_ROOT="$candidate"
+    break
+  fi
+done
+```
+
+### 0.2 确保编译产物存在
+
+```bash
+if [ ! -f "$PLUGIN_ROOT/dist/code-scanner.js" ] || [ ! -f "$PLUGIN_ROOT/dist/generator/context.js" ]; then
+  cd "$PLUGIN_ROOT" && pnpm install --frozen-lockfile && pnpm run build
+fi
+```
+
+### 0.3 解析项目配置
+
+读取 `~/.gant-atlas/projects.json`，匹配第一个非 flag 参数。
+必填字段：`id`、`docsPath`。可选：`codeDir`、`routesFile`。
+
+如未提供 project id，报错："请提供 project id。"
+
+### 0.4 确定规范根目录
+
+规范目录位于技能内部的 `prompts/` 下（自包含，不依赖外部 docs）：
+
+```bash
+SPEC_ROOT="$PLUGIN_ROOT/skills/generate-docs/prompts"
+```
+
+关键文件路径（后续各阶段引用）：
+- 页面类型检测：`$SPEC_ROOT/reference/page-type-detection.md`
+- 主页面规范：`$SPEC_ROOT/reference/page-main-spec.md`
+- 详情页规范：`$SPEC_ROOT/reference/page-detail-spec.md`
+- 输出生成规范：`$SPEC_ROOT/reference/output-generation.md`
+- 主页面模板：`$SPEC_ROOT/templates/page-main/`
+- 详情页模板：`$SPEC_ROOT/templates/page-detail/`
+- 通用模板：`$SPEC_ROOT/templates/common/`
+
+### 0.5 创建中间目录
+
+```bash
+PROJECT_ROOT=$(dirname "$docsPath")
+mkdir -p "$PROJECT_ROOT/.gant-atlas/intermediate/generate"
+mkdir -p "$PROJECT_ROOT/.gant-atlas/tmp"
+```
+
+存储路径：
+- `$INTERMEDIATE = $PROJECT_ROOT/.gant-atlas/intermediate/generate`
+- `$TMP = $PROJECT_ROOT/.gant-atlas/tmp`
+- `$META = $PROJECT_ROOT/.gant-atlas/generate-meta.json`（持久化，跨运行保留）
+
+---
+
+## 阶段 1 — 扫描页面
+
+报告：`[阶段 1/7] 从路由扫描页面...`
+
+运行打包的扫描器：
 
 ```bash
 node "$PLUGIN_ROOT/skills/generate-docs/scripts/scan-pages.mjs" \
@@ -99,29 +116,28 @@ node "$PLUGIN_ROOT/skills/generate-docs/scripts/scan-pages.mjs" \
   "$INTERMEDIATE/pages.json"
 ```
 
-Read `$INTERMEDIATE/pages.json`.
+读取 `$INTERMEDIATE/pages.json`。
 
-If `--module` is specified, filter pages to that module.
-If `--page` is specified, keep only that page.
-If no pages remain, error and stop.
+如指定了 `--module`，过滤到该模块。
+如指定了 `--page`，只保留该页面。
+如无剩余页面，报错并停止。
 
-Store filtered list as `$PAGES`.
+存储过滤后的列表为 `$PAGES`。
 
 ---
 
-## Phase 1.5 — Incremental filter
+## 阶段 1.5 — 增量过滤
 
-Report: `[Phase 1.5/7] Filtering unchanged pages...`
+报告：`[阶段 1.5/7] 过滤未变更页面...`
 
-This phase determines which pages actually need regeneration by comparing
-source code hashes against the previous generation metadata.
+本阶段通过比较源码哈希与上次生成元数据，确定哪些页面真正需要重新生成。
 
-**If `--full` is in `$ARGUMENTS`**: skip this phase entirely, all pages proceed
-to Phase 2. Report: `Full rebuild requested — all pages will be regenerated.`
+**如 `$ARGUMENTS` 包含 `--full`**：跳过本阶段，所有页面进入阶段 2。
+报告：`全量重建已请求 — 所有页面将重新生成。`
 
-**Otherwise**:
+**否则**：
 
-Run the incremental filter:
+运行增量过滤器：
 
 ```bash
 node "$PLUGIN_ROOT/skills/generate-docs/scripts/incremental-filter.mjs" \
@@ -131,29 +147,28 @@ node "$PLUGIN_ROOT/skills/generate-docs/scripts/incremental-filter.mjs" \
   "$INTERMEDIATE/generate-meta-staging.json"
 ```
 
-This script:
-1. Reads `pages.json` (all discovered pages)
-2. Reads `generate-meta.json` (previous generation hashes, may not exist)
-3. For each page, computes SHA-256 of all `.ts/.tsx/.js/.jsx` files in `pageDir`
-4. Compares current hash vs previous hash
-5. Writes `filtered-pages.json` containing only changed/new pages
-6. Writes `generate-meta-staging.json` with updated hashes
+该脚本：
+1. 读取 `pages.json`（所有发现页面）
+2. 读取 `generate-meta.json`（上次生成哈希，可能不存在）
+3. 对每个页面，计算 pageDir 下所有 `.ts/.tsx/.js/.jsx` 文件的 SHA-256
+4. 比较当前哈希与上次哈希
+5. 写入 `filtered-pages.json`（仅变更/新增页面）
+6. 写入 `generate-meta-staging.json`（更新后的哈希）
 
-After the script completes:
-
-- Read `$INTERMEDIATE/filtered-pages.json`
-- Report to user: `N pages changed, M pages unchanged (skipped).`
-- If 0 pages changed: report "All pages up to date. Use --full to force regeneration." and STOP.
-- Replace `$PAGES` with the filtered page list
-- Store `$META_STAGING = $INTERMEDIATE/generate-meta-staging.json`
+脚本完成后：
+- 读取 `$INTERMEDIATE/filtered-pages.json`
+- 向用户报告：`N 个页面已变更，M 个页面未变更（已跳过）。`
+- 如 0 个页面变更：报告"所有页面已是最新。使用 --full 强制重新生成。"并停止。
+- 用过滤后的页面列表替换 `$PAGES`
+- 存储 `$META_STAGING = $INTERMEDIATE/generate-meta-staging.json`
 
 ---
 
-## Phase 2 — Extract contexts
+## 阶段 2 — 提取上下文 + 页面类型检测
 
-Report: `[Phase 2/7] Extracting page contexts...`
+报告：`[阶段 2/7] 提取页面上下文...`
 
-For each page in `$PAGES`, run:
+对每个页面运行：
 
 ```bash
 node "$PLUGIN_ROOT/skills/generate-docs/scripts/extract-page-context.mjs" \
@@ -163,16 +178,16 @@ node "$PLUGIN_ROOT/skills/generate-docs/scripts/extract-page-context.mjs" \
   "$INTERMEDIATE/context-$pageId.json"
 ```
 
-Report progress every N pages:
+**页面类型检测**：`extract-page-context.mjs` 已内置检测逻辑，输出 JSON 中自动包含 `pageType` 字段（`page-main` 或 `page-detail`）。
 
-> `Extracted context for page M/N: module/pageName`
+进度报告：`已提取第 M/N 页上下文：module/pageName (类型: pageType)`
 
-After all contexts are extracted, build a batch plan.
+所有上下文提取完成后，构建批次计划。
 
-Default batch size: **5 pages per subagent**.
-If total pages <= 5, use a single batch.
+默认批次大小：**每子 Agent 5 个页面**。
+总页面数 ≤ 5 时，单批次处理。
 
-Write `$INTERMEDIATE/batches.json`:
+写入 `$INTERMEDIATE/batches.json`：
 
 ```json
 {
@@ -180,56 +195,117 @@ Write `$INTERMEDIATE/batches.json`:
   "totalPages": 12,
   "batchSize": 5,
   "batches": [
-    { "batchIndex": 1, "pageIds": ["ibom/pageA", "ibom/pageB", ...] },
-    ...
+    { "batchIndex": 1, "pageIds": ["ibom/pageA", "ibom/pageB", ...] }
   ]
 }
 ```
 
 ---
 
-## Phase 3 — Write Markdown (subagent dispatch)
+## 阶段 3 — 写入 Markdown（子 Agent 调度）
 
-Report: `[Phase 3/7] Writing Markdown via subagents...`
+报告：`[阶段 3/7] 通过子 Agent 写入 Markdown...`
 
-Load `$INTERMEDIATE/batches.json`. Iterate batches.
+加载 `$INTERMEDIATE/batches.json`，遍历批次。
 
-For each batch, dispatch a subagent using `agents/page-writer.md`. Run up to
-**3 subagents concurrently** (conservative to avoid token surge).
+每个批次最多 **3 个子 Agent 并发**（保守策略，避免 token 激增）。
 
-Dispatch prompt template:
+### 子 Agent 调度模板
+
+对每个批次，使用 `agents/page-writer.md` 调度子 Agent。
+
+调度 Prompt 模板：
 
 ```
-Generate feature-doc Markdown files for these pages.
+为以下页面生成 feature-doc Markdown 文件。
 
-Project root: $PROJECT_ROOT
-Docs path: $docsPath
+项目根目录：$PROJECT_ROOT
+文档输出路径：$docsPath
+规范根目录：$SPEC_ROOT
 
-Pages (with full contexts):
-1. module/pageName
-   Context file: $INTERMEDIATE/context-module-pageName.json
-2. ...
+页面列表（含完整上下文）：
 
-Instructions:
-- Read each context JSON file.
-- For each page, write main.md, search-area.md, grid-area.md, button-area.md, api-area.md under $docsPath/module/pageName/.
-- Skip files that are not applicable (e.g. no search fields means no search-area.md).
-- Use [AI生成-需确认] when uncertain.
-- Return a JSON summary of pagesWritten and warnings.
+{for each page in batch}
+---
+页面 #{index}: {pageId}
+页面类型：{pageType}  ← page-main 或 page-detail
+上下文文件：$INTERMEDIATE/context-{pageId}.json
+
+模板文件（根据 pageType）：
+- page-main:
+  - 主文档模板：$SPEC_ROOT/templates/page-main/main.md
+  - 查询区模板：$SPEC_ROOT/templates/page-main/search-area.md
+  - 按钮区模板：$SPEC_ROOT/templates/page-main/button-area.md
+  - 表格区模板：$SPEC_ROOT/templates/page-main/grid-area.md
+  - 其他功能模板：$SPEC_ROOT/templates/page-main/other-features.md
+- page-detail:
+  - 主文档模板：$SPEC_ROOT/templates/page-detail/main.md
+  - 头部按钮模板：$SPEC_ROOT/templates/page-detail/header-buttons.md
+  - 基本信息页签模板：$SPEC_ROOT/templates/page-detail/base-info-tab.md
+  - 子页签模板：$SPEC_ROOT/templates/page-detail/sub-tab.md
+- 通用模板（如需要）：
+  - 弹窗模板：$SPEC_ROOT/templates/common/popup.md
+  - 复杂按钮模板：$SPEC_ROOT/templates/common/button-function.md
+
+规范文件：
+- 页面规范：$SPEC_ROOT/reference/{pageType === 'page-main' ? 'page-main-spec.md' : 'page-detail-spec.md'}
+- 输出生成规范：$SPEC_ROOT/reference/output-generation.md
+
+要求：
+1. 读取该页面的上下文 JSON 文件。
+2. 根据 pageType 读取对应的模板文件。
+3. 读取对应的规范文件（page-main-spec.md 或 page-detail-spec.md）和 output-generation.md。
+4. 严格遵循模板格式和规范要求生成 Markdown。
+5. 为每个页面在 $docsPath/<module>/<pageName>/ 下写入（按 pageType）：
+   - page-main: main.md（必须）、search-area.md（如有搜索字段）、grid-area.md（如有表格列）、button-area.md（如有按钮）、api-area.md（如有 API）
+   - page-detail: main.md（必须）、header-buttons.md（如有按钮）、base-info-tab.md（如有基本信息）、sub-tab-{name}.md（如有子页签）、api-area.md（如有 API）
+6. 不编造上下文中不存在的字段或 API。
+7. 不确定时写 [待确认]。
+8. 返回 JSON 摘要：pagesWritten 和 warnings。
+{end for}
 ```
 
-Wait for all subagents to complete. Collect their JSON summaries.
+等待所有子 Agent 完成。收集其 JSON 摘要。
 
-If a subagent fails, retry once with the same context. If it fails again, record
-a warning and continue; partial output is better than no output.
+如子 Agent 失败，用相同上下文重试一次。如再次失败，记录警告并继续；部分输出优于无输出。
 
 ---
 
-## Phase 4 — Merge docs
+## 阶段 3.5 — Sync Hook（可选）
 
-Report: `[Phase 4/7] Merging generated docs...`
+报告：`[阶段 3.5/7] Sync Hook：对比代码与清单差异...`
 
-Run the merge script:
+对于每个在阶段 3 生成或更新了 Markdown 的页面，运行 Sync Hook 对比代码扫描结果与当前功能清单：
+
+```bash
+for pageId in $PAGES; do
+  node "$PLUGIN_ROOT/skills/generate-docs/scripts/sync-page.mjs" \
+    "$docsPath" \
+    "$dbPath" \
+    "$codeDir" \
+    "$routesFile" \
+    "$pageId" \
+    > "$INTERMEDIATE/sync-$pageId.json"
+done
+```
+
+**前提条件**：项目配置 `projects.json` 中包含 `dbPath`。
+
+Sync Hook 的行为：
+1. 扫描页面代码生成当前 skeleton。
+2. 读取现有 `feature-docs/<module>/<page>/` 下的 Markdown。
+3. 生成结构化 diff 并写入 `.gant-atlas/sync-outbox/<pageId>.json`。
+4. 不自动覆盖功能清单文件；差异等待人工审核或 `--apply-pending` 应用。
+
+进度报告：`Sync Hook 完成：N 个页面有变更，M 个页面无变更。`
+
+---
+
+## 阶段 4 — 合并文档
+
+报告：`[阶段 4/7] 合并生成的文档...`
+
+运行合并脚本：
 
 ```bash
 node "$PLUGIN_ROOT/skills/generate-docs/scripts/merge-docs.mjs" \
@@ -237,94 +313,104 @@ node "$PLUGIN_ROOT/skills/generate-docs/scripts/merge-docs.mjs" \
   "$docsPath"
 ```
 
-This copies intermediate Markdown files into the final `feature-docs/` tree.
+将中间 Markdown 文件复制到最终的 `feature-docs/` 目录树。
 
 ---
 
-## Phase 5 — Review
+## 阶段 5 — 审阅
 
-Report: `[Phase 5/7] Reviewing output...`
+报告：`[阶段 5/7] 审阅输出...`
 
-Dispatch a subagent using `agents/reviewer.md`.
+使用 `agents/reviewer.md` 调度子 Agent。
 
-Pass:
+传递：
 - `projectRoot`
 - `docsPath`
-- `pageIds` = all pages in `$PAGES`
+- `pageIds` = `$PAGES` 中的所有页面
+- `specRoot` = `$SPEC_ROOT`
 
-The reviewer reads the generated Markdown and reports issues/warnings.
+审阅者读取生成的 Markdown，对照 `$SPEC_ROOT/reference/` 下的规范文件检查：
+1. 是否遵循了对应模板格式
+2. 是否有遗漏的章节（如页面结构图、全页面功能索引、状态差异矩阵）
+3. 表格列数是否符合规范要求
+4. 是否有 `[待确认]` 内容需要关注
 
-Store the review result at `$INTERMEDIATE/review.json`.
-
----
-
-## Phase 6 — Save and report
-
-Report: `[Phase 6/7] Saving meta and report...`
-
-1. **Update generation meta.** Promote the staging meta to the persistent location:
-
-   ```bash
-   # If incremental-filter ran (non --full), use the staging meta
-   if [ -f "$META_STAGING" ]; then
-     cp "$META_STAGING" "$META"
-   fi
-   ```
-
-   Then mark all successfully generated pages:
-
-   ```bash
-   node "$PLUGIN_ROOT/skills/generate-docs/scripts/update-generate-meta.mjs" \
-     "$META" \
-     successfulPageId1 successfulPageId2 ...
-   ```
-
-2. Write a summary to `$INTERMEDIATE/generation-report.json`:
-
-   ```json
-   {
-     "generatedAt": "2026-06-08T...",
-     "totalPagesScanned": 50,
-     "pagesChanged": 12,
-     "pagesSkipped": 38,
-     "successfulPages": ["..."],
-     "failedPages": ["..."],
-     "warnings": ["..."],
-     "docsPath": "..."
-   }
-   ```
-
-3. Print a final summary to the user:
-   - Total pages scanned vs changed vs skipped
-   - Successful vs failed
-   - Path to `feature-docs/`
-   - Path to review report
-   - Note any warnings from the reviewer
-
-4. Optionally run `gant-atlas ingest` on the new docs if the project config
-   includes a dbPath:
-
-   ```bash
-   pnpm exec gant-atlas ingest --docsPath "$docsPath" --db "$dbPath"
-   ```
-
-   This keeps the SQLite knowledge graph in sync with the newly generated docs.
+将审阅结果存储到 `$INTERMEDIATE/review.json`。
 
 ---
 
-## Error handling
+## 阶段 6 — 保存与报告
 
-- If `scan-pages.mjs` exits non-zero → report stderr and stop.
-- If `incremental-filter.mjs` exits non-zero → treat as full rebuild (defensive fallback).
-- If `extract-page-context.mjs` fails for a page → skip that page with a warning.
-- If a `page-writer` subagent fails twice → skip that batch with a warning.
-- Never silently drop errors. Every warning appears in the final report.
-- **Always save partial results.** A partial generation is better than no generation.
-- **Always update meta** for successfully generated pages, even if some failed.
+报告：`[阶段 6/7] 保存元数据与报告...`
+
+### 6.1 更新生成元数据
+
+将暂存元数据提升为持久位置：
+
+```bash
+if [ -f "$META_STAGING" ]; then
+  cp "$META_STAGING" "$META"
+fi
+```
+
+标记所有成功生成的页面：
+
+```bash
+node "$PLUGIN_ROOT/skills/generate-docs/scripts/update-generate-meta.mjs" \
+  "$META" \
+  successfulPageId1 successfulPageId2 ...
+```
+
+### 6.2 写入生成报告
+
+写入摘要到 `$INTERMEDIATE/generation-report.json`：
+
+```json
+{
+  "generatedAt": "2026-06-09T...",
+  "totalPagesScanned": 50,
+  "pagesChanged": 12,
+  "pagesSkipped": 38,
+  "successfulPages": ["..."],
+  "failedPages": ["..."],
+  "warnings": ["..."],
+  "docsPath": "..."
+}
+```
+
+### 6.3 向用户输出最终摘要
+
+- 扫描页面总数 vs 变更数 vs 跳过数
+- 成功数 vs 失败数
+- `feature-docs/` 路径
+- 审阅报告路径
+- 审阅者发现的任何警告
+
+### 6.4 可选：同步知识图谱
+
+如项目配置包含 `dbPath`，可运行：
+
+```bash
+pnpm exec gant-atlas ingest --docsPath "$docsPath" --db "$dbPath"
+```
+
+保持 SQLite 知识图谱与新文档同步。
 
 ---
 
-## Example invocation
+## 错误处理
+
+- `scan-pages.mjs` 非零退出 → 报告 stderr 并停止。
+- `incremental-filter.mjs` 非零退出 → 视为全量重建（防御性回退）。
+- `extract-page-context.mjs` 某个页面失败 → 跳过该页面并记录警告。
+- `page-writer` 子 Agent 连续两次失败 → 跳过该批次并记录警告。
+- **绝不静默丢弃错误**。每个警告都出现在最终报告中。
+- **始终保存部分结果**。部分生成优于无生成。
+- **始终更新成功页面的元数据**，即使部分页面失败。
+
+---
+
+## 示例调用
 
 ```
 /gant-atlas-generate demo

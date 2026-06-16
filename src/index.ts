@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { join } from 'path';
 import { NAME, VERSION } from './version.js';
 import { serve } from './mcp/server.js';
-import { runIngest, runQueryPage, runMap, runValidate, runGenerate, runManifest, runStatus } from './cli/actions.js';
+import { runIngest, runQueryPage, runMap, runValidate, runGenerate, runManifest, runStatus, runSync } from './cli/actions.js';
 import { setupCommand } from './cli/setup.js';
 
 const program = new Command();
@@ -144,6 +144,38 @@ program
     console.error(`[gant-atlas] 生成完成: ${result.generated.length} 个文件, 跳过 ${result.skipped.length} 个已有文件`);
     if (result.skipped.length > 0 && !options.force) {
       console.error(`[gant-atlas] 提示: 使用 --force 可覆盖已有文件`);
+    }
+  });
+
+program
+  .command('sync')
+  .description('对比代码与功能清单，生成 sync diff 并写入 outbox')
+  .requiredOption('--docsPath <path>', '功能清单根目录路径')
+  .requiredOption('--db <path>', 'SQLite 数据库文件路径')
+  .requiredOption('--codeDir <path>', '代码根目录路径')
+  .requiredOption('--routesFile <path>', '路由配置文件路径')
+  .option('--list-pending', '列出待处理的 sync 记录')
+  .option('--apply-pending', '应用所有待处理的 sync 记录')
+  .argument('[pageId]', '页面 ID（格式：module/pageName）')
+  .action(async (pageId: string | undefined, options: { docsPath: string; db: string; codeDir: string; routesFile: string; listPending?: boolean; applyPending?: boolean }) => {
+    const result = await runSync({
+      pageId,
+      docsPath: options.docsPath,
+      dbPath: options.db,
+      codeDir: options.codeDir,
+      routesFile: options.routesFile,
+      listPending: options.listPending,
+      applyPending: options.applyPending,
+    });
+
+    if (result.type === 'list') {
+      console.log(JSON.stringify(result.pending, null, 2));
+    } else if (result.type === 'apply') {
+      console.error(`[gant-atlas] 已应用 ${result.applied?.length ?? 0} 个 sync 记录`);
+      console.log(JSON.stringify(result.applied, null, 2));
+    } else {
+      console.error(`[gant-atlas] sync diff 已生成: ${result.pageId} (${result.diff?.hasChanges ? '有变更' : '无变更'})`);
+      console.log(JSON.stringify(result.diff, null, 2));
     }
   });
 

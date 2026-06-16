@@ -51,6 +51,26 @@ describe('handleCheckConsistency', () => {
       module: 'mod',
       meta: { route: '/no-columns', pageType: 'form' },
     });
+    store.insertNode({
+      id: 'page:mod/page-stale',
+      type: 'page',
+      name: 'page-stale',
+      title: 'Stale Page',
+      summary: '',
+      tags: [],
+      module: 'mod',
+      meta: { route: '/stale', pageType: 'list' },
+    });
+    store.insertNode({
+      id: 'page:mod/page-bad-api',
+      type: 'page',
+      name: 'page-bad-api',
+      title: 'Bad API Page',
+      summary: '',
+      tags: [],
+      module: 'mod',
+      meta: { route: '/bad-api', pageType: 'list' },
+    });
 
     // Fields for complete page
     store.insertNode({
@@ -94,6 +114,54 @@ describe('handleCheckConsistency', () => {
       meta: { editable: false },
     });
 
+    // Columns and fields for stale page so it only triggers stale_page
+    store.insertNode({
+      id: 'field:mod/page-stale/field/0',
+      type: 'field',
+      name: 'query',
+      title: 'Query',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: false },
+    });
+    store.insertNode({
+      id: 'column:mod/page-stale/col/0',
+      type: 'column',
+      name: 'query',
+      title: 'Query',
+      summary: 'Query',
+      tags: [],
+      meta: { editable: false },
+    });
+
+    // Button and field that reference a missing API
+    store.insertNode({
+      id: 'button:mod/page-bad-api/btn/0',
+      type: 'button',
+      name: 'submit',
+      title: '提交',
+      summary: '',
+      tags: [],
+    });
+    store.insertNode({
+      id: 'field:mod/page-bad-api/field/0',
+      type: 'field',
+      name: 'keyword',
+      title: '关键词',
+      summary: '',
+      tags: [],
+      meta: { componentType: 'Input', required: false },
+    });
+    store.insertNode({
+      id: 'column:mod/page-bad-api/col/0',
+      type: 'column',
+      name: 'keyword',
+      title: '关键词',
+      summary: '关键词',
+      tags: [],
+      meta: { editable: false },
+    });
+
     // Fields for no-fields page (but no columns)
     store.insertNode({
       id: 'field:mod/page-no-fields/field/0',
@@ -120,6 +188,18 @@ describe('handleCheckConsistency', () => {
     store.insertEdge({ source: 'page:mod/page-complete', target: 'column:mod/page-complete/col/0', type: 'contains' });
     store.insertEdge({ source: 'page:mod/page-no-columns', target: 'column:mod/page-no-columns/col/0', type: 'contains' });
     store.insertEdge({ source: 'page:mod/page-no-fields', target: 'field:mod/page-no-fields/field/0', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-stale', target: 'field:mod/page-stale/field/0', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-stale', target: 'column:mod/page-stale/col/0', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-bad-api', target: 'button:mod/page-bad-api/btn/0', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-bad-api', target: 'field:mod/page-bad-api/field/0', type: 'contains' });
+    store.insertEdge({ source: 'page:mod/page-bad-api', target: 'column:mod/page-bad-api/col/0', type: 'contains' });
+
+    // stale flag on page-stale
+    store.markNodeStale('page:mod/page-stale', true);
+
+    // button/field calling a non-existent API
+    store.insertEdge({ source: 'button:mod/page-bad-api/btn/0', target: 'api:api/missingApi', type: 'calls' });
+    store.insertEdge({ source: 'field:mod/page-bad-api/field/0', target: 'api:api/missingApi', type: 'calls' });
 
     // saveApi is referenced by no one -> orphan
   });
@@ -182,6 +262,29 @@ describe('handleCheckConsistency', () => {
     const noFieldLink = result.issues.filter((i: { type: string }) => i.type === 'page_api_no_field_link');
     // page-complete has page-level API (findListApi) but no fieldCallsApis
     expect(noFieldLink.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('detects stale pages', async () => {
+    const result = parseResult(await handleCheckConsistency(store, {}));
+    const stale = result.issues.filter((i: { type: string }) => i.type === 'stale_page');
+    expect(stale.length).toBe(1);
+    expect(stale[0].description).toContain('page-stale');
+  });
+
+  it('detects buttons calling missing APIs', async () => {
+    const result = parseResult(await handleCheckConsistency(store, {}));
+    const buttonIssues = result.issues.filter((i: { type: string }) => i.type === 'button_calls_missing_api');
+    expect(buttonIssues.length).toBe(1);
+    expect(buttonIssues[0].description).toContain('page-bad-api');
+    expect(buttonIssues[0].description).toContain('missingApi');
+  });
+
+  it('detects fields calling missing APIs', async () => {
+    const result = parseResult(await handleCheckConsistency(store, {}));
+    const fieldIssues = result.issues.filter((i: { type: string }) => i.type === 'field_calls_missing_api');
+    expect(fieldIssues.length).toBe(1);
+    expect(fieldIssues[0].description).toContain('关键词');
+    expect(fieldIssues[0].description).toContain('missingApi');
   });
 
   it('filters by pageId when provided', async () => {

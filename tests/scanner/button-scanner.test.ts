@@ -8,7 +8,7 @@ describe('scanPageButtons', () => {
   it('extracts button candidates from TSX page files', async () => {
     const result = await scanPageButtons(FIXTURES_DIR);
 
-    expect(result.buttons.length).toBeGreaterThanOrEqual(3);
+    expect(result.buttons.length).toBeGreaterThanOrEqual(2);
 
     const addButton = result.buttons.find((b) => b.name === '新增');
     expect(addButton).toBeDefined();
@@ -21,9 +21,9 @@ describe('scanPageButtons', () => {
     expect(deleteButton?.element).toBe('ActionButton');
     expect(deleteButton?.onClick).toContain('handleDelete');
 
+    // <a> links are navigation, not buttons — should be excluded
     const exportLink = result.buttons.find((b) => b.name === '导出');
-    expect(exportLink).toBeDefined();
-    expect(exportLink?.element).toBe('a');
+    expect(exportLink).toBeUndefined();
   });
 
   it('extracts custom hooks that call APIs', async () => {
