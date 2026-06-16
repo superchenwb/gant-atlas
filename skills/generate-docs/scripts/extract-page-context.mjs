@@ -75,14 +75,17 @@ async function main() {
   }
 
   const pathAliases = loadPathAliases(codeDir);
+  const labelMap = loadButtonLabelMap();
   const codeInfo = await scanPageDir(pageDir, moduleName, pageName, {
     codeDir,
     pathAliases,
+    route: targetRoute,
+    labelMap,
   });
   const context = buildPageGenerationContext(codeInfo, targetRoute);
 
   // 页面类型检测：优先使用扫描器推断的结果，回退到路径启发式
-  context.pageType = codeInfo.pageType ?? detectPageType(pageDir);
+  context.pageType = codeInfo.pageType ?? detectPageType(targetRoute.path, codeInfo);
 
   // Post-process: extract hook usages from index.tsx to supplement scanPageButtons.
   // Only keep hooks imported from local files; skip framework hooks (procomponents, react, etc.).
@@ -138,6 +141,8 @@ async function main() {
       }
       // Skip hooks known to come from external libraries
       if (hookImportMap.has(hookName)) continue;
+      // Skip event handler wrapper hooks (e.g. usePBomSearchFormValueChange)
+      if (isEventHandlerHook(hookName)) continue;
       usedHooks.add(hookName);
     }
     for (const hookName of usedHooks) {
@@ -158,13 +163,35 @@ async function main() {
   );
 }
 
-function detectPageType(pageDir) {
-  // 简化的页面类型检测：文件夹路径中包含 /detail/ 或目录名为 detail 即为详情页
-  const lower = pageDir.toLowerCase();
-  if (lower.includes('/detail/') || lower.endsWith('/detail')) {
+function detectPageType(routePath, codeInfo) {
+  // 优先使用路由路径判断详情页：/detail、/edit、/view、/info 等关键字
+  const path = (routePath ?? '').toLowerCase();
+  if (/\/(?:detail|edit|view|info)(?:\/|$)/.test(path)) {
+    return 'page-detail';
+  }
+  // 无表格列但有表单字段时，也判定为详情页
+  if (codeInfo && codeInfo.gridColumns?.length === 0 && codeInfo.searchFields?.length > 0) {
     return 'page-detail';
   }
   return 'page-main';
+}
+
+function isEventHandlerHook(name) {
+  // Skip hooks that wrap form/cell/table event handlers, e.g. usePBomSearchFormValueChange, usePBomCellEidtChange
+  if (/use[A-Z].*(?:ValueChange|FormValueChange|SearchFormValueChange|Cell\w*Change|SelectionChange|RowClick|CellClick)/.test(name)) {
+    return true;
+  }
+  return /use[A-Z].*Change$/.test(name);
+}
+
+function loadButtonLabelMap() {
+  const mapPath = join(PLUGIN_ROOT, 'skills', 'generate-docs', 'prompts', 'reference', 'button-label-map.json');
+  try {
+    const raw = readFileSync(mapPath, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
 }
 
 main().catch((err) => {

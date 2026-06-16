@@ -58,7 +58,7 @@ This file is the **project command center** for both AI agents and the human arc
 | T7 联邦查询层 | P2 | ✅ | 3 个测试 |
 | T8 Schema Migration 框架 | P3 | ✅ | up/downgrade 测试 |
 
-**测试总览**：36 个测试文件，242 个测试用例，全部通过。TypeScript strict 模式零错误。
+**测试总览**：36 个测试文件，246 个测试用例，全部通过。TypeScript strict 模式零错误。
 
 **阻塞项**：无。Phase 1 全部完成，可进入 Phase 2 规划。
 
@@ -71,6 +71,13 @@ This file is the **project command center** for both AI agents and the human arc
   - `--apply-pending` 成功更新文档 ✅
   - 恢复代码后，`sync` 再次检测到文档与代码不一致 ✅
   - 已恢复 yadea-bom 源码，未留下任何变更 ✅
+- 2026-06-16 优化 generator 扫描器后在 5 个 yadea-bom 页面上验证：
+  - 详情页类型推断从 pageDir 改为 route.path ✅
+  - 按钮事件回调过滤（pbommain 38→26）✅
+  - Hook 噪音过滤（pbommain 4→2）✅
+  - 按钮名称提取改进（仅 1 个 None 残留）✅
+  - 项目特定按钮标签移到 `button-label-map.json` 配置 ✅
+  - 剩余挑战：详情页动态 schema（如 bomdetail）需要 LLM fallback
 
 ---
 

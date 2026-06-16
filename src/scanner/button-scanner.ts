@@ -109,6 +109,26 @@ function extractAttributeValue(
   return initializer.getText?.();
 }
 
+/**
+ * Extract human-readable label text from an attribute initializer.
+ * Prefers string literals, then tries to unwrap tr('xxx') calls inside JSX expressions.
+ */
+function extractLabelAttributeValue(
+  ts: typeof import('typescript'),
+  initializer: import('typescript').Expression | undefined
+): string | undefined {
+  if (!initializer) return undefined;
+  if (ts.isStringLiteral(initializer) || ts.isNoSubstitutionTemplateLiteral(initializer)) {
+    return initializer.text;
+  }
+  const text = initializer.getText?.();
+  if (text) {
+    const trMatch = text.match(/tr\(['"`]([^'"`]+)['"`]\)/);
+    if (trMatch) return trMatch[1];
+  }
+  return undefined;
+}
+
 function findJsxAttribute(
   ts: typeof import('typescript'),
   attributes: import('typescript').JsxAttributes,
@@ -154,18 +174,30 @@ function collectButtonFromJsxElement(
       if (ts.isJsxText(child)) {
         const t = child.text.trim();
         if (t) texts.push(t);
-      } else if (ts.isJsxExpression(child) && child.expression && ts.isStringLiteral(child.expression)) {
-        texts.push(child.expression.text);
+      } else if (ts.isJsxExpression(child) && child.expression) {
+        // Support {tr('xxx')} and bare string literals
+        const expr = child.expression;
+        if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+          texts.push(expr.text);
+        } else if (
+          ts.isCallExpression(expr) &&
+          ts.isIdentifier(expr.expression) &&
+          expr.expression.text === 'tr' &&
+          expr.arguments.length > 0 &&
+          (ts.isStringLiteral(expr.arguments[0]) || ts.isNoSubstitutionTemplateLiteral(expr.arguments[0]))
+        ) {
+          texts.push(expr.arguments[0].text);
+        }
       }
     }
     if (texts.length > 0) name = texts.join(' ');
   }
   // Fallback to common text props if no children text found.
   if (!name) {
-    for (const propName of ['label', 'text', 'title', 'name']) {
+    for (const propName of ['label', 'text', 'title', 'name', 'content', 'tooltip', 'registerDropDownKey']) {
       const attr = findJsxAttribute(ts, open.attributes, propName);
       if (attr?.initializer) {
-        const val = extractAttributeValue(ts, attr.initializer);
+        const val = extractLabelAttributeValue(ts, attr.initializer);
         if (val) {
           name = val;
           break;
@@ -488,12 +520,46 @@ function findButtonDirs(dir: string, result: string[], depth = 0): void {
 }
 
 /**
+ * Detect event-handler callback names that should not be surfaced as action buttons.
+ * Examples: onPBomSearchFormValueChange, onCellEditChange, onSelectionChange.
+ */
+const EVENT_HANDLER_PATTERNS = [
+  /on[A-Z].*ValueChange$/,
+  /on[A-Z].*FormValueChange$/,
+  /on[A-Z].*CellEditChange$/,
+  /on[A-Z].*SearchFormValueChange$/,
+  /on[A-Z].*SelectionChange$/,
+  /on[A-Z].*PageChange$/,
+  /on[A-Z].*RowClick$/,
+  /on[A-Z].*CellClick$/,
+  /on[A-Z].*Mouse\w+$/,
+  /on[A-Z].*Key\w+$/,
+  /on[A-Z].*Focus$/,
+  /on[A-Z].*Blur$/,
+  /on[A-Z].*Input$/,
+];
+
+function isEventHandlerName(name: string): boolean {
+  return EVENT_HANDLER_PATTERNS.some((p) => p.test(name));
+}
+
+function isEventHandlerWrapperHook(name: string): boolean {
+  // Catch common event handler wrappers, including typos like CellEidtChange.
+  if (/use[A-Z].*(?:ValueChange|FormValueChange|SearchFormValueChange|Cell\w*Change|SelectionChange|RowClick|CellClick)/.test(name)) {
+    return true;
+  }
+  // Broad fallback: hooks whose name ends with Change and don't call APIs are likely event wrappers.
+  return /use[A-Z].*Change$/.test(name);
+}
+
+/**
  * Infer a human-readable button label from an action callback name.
  */
 const ACTION_LABEL_MAP: Record<string, string> = {
   ondelete: '删除',
   onremove: '删除',
   ondel: '删除',
+  onbatchdelete: '批量删除',
   onbomarchived: '归档',
   onarchive: '归档',
   onpreview: '预览',
@@ -507,10 +573,46 @@ const ACTION_LABEL_MAP: Record<string, string> = {
   oncopy: '复制',
   onexport: '导出',
   onimport: '导入',
+  onbatchexport: '批量导出',
+  onbatchimport: '批量导入',
+  onbatchsave: '批量保存',
+  onbatchsubmit: '批量提交',
+  onbatchupdate: '批量更新',
   onrestore: '恢复',
   onrefresh: '刷新',
   onsearch: '查询',
   onreset: '重置',
+  ondownload: '下载',
+  onupload: '上传',
+  onprint: '打印',
+  onenable: '启用',
+  ondisable: '禁用',
+  onapprove: '审批',
+  onreject: '驳回',
+  onrevoke: '撤销',
+  onrelease: '发布',
+  onpublish: '发布',
+  onsync: '同步',
+  onsyncdata: '同步数据',
+  oncompare: '对比',
+  onmerge: '合并',
+  onsplit: '拆分',
+  onmove: '移动',
+  onupgrade: '升级',
+  ondowngrade: '降级',
+  onapply: '应用',
+  onassign: '分配',
+  onunassign: '取消分配',
+  onlock: '锁定',
+  onunlock: '解锁',
+  onbind: '绑定',
+  onunbind: '解绑',
+  onlink: '关联',
+  onunlink: '取消关联',
+  onvalidate: '校验',
+  oncalculate: '计算',
+  ongenerate: '生成',
+  ongencode: '生成编码',
 };
 
 function inferActionLabel(actionName: string): string {
@@ -570,10 +672,16 @@ async function extractActionButtonsFromHook(hook: HookCandidate): Promise<Button
 
       for (const candidate of candidates) {
         if (!candidate.initializer) continue;
+        // Skip event handler callbacks (e.g. onPBomSearchFormValueChange)
+        if (isEventHandlerName(candidate.name)) continue;
         const apis = collectApiCalls(ts, candidate.initializer);
+        const label = inferActionLabel(candidate.name);
+        // Only surface synthetic buttons for known actions or callbacks that call APIs.
+        // Unknown onXxxChange/onXxxValueChange handlers are treated as event callbacks.
+        if (apis.length === 0 && label === candidate.name) continue;
         const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
         buttons.push({
-          name: inferActionLabel(candidate.name),
+          name: label,
           element: 'ContextAction',
           snippet: node.getText(sourceFile).slice(0, 400),
           line,
@@ -596,7 +704,12 @@ async function extractActionButtonsFromHook(hook: HookCandidate): Promise<Button
  * Recursively reads all .ts/.tsx files (excluding well-known non-source files
  * like schema.ts, services.ts, etc.) to discover button components and custom hooks.
  */
-export async function scanPageButtons(pageDir: string): Promise<PageButtonScanResult> {
+export async function scanPageButtons(
+  pageDir: string,
+  options?: {
+    labelMap?: Record<string, string>;
+  },
+): Promise<PageButtonScanResult> {
   const buttons: ButtonCandidate[] = [];
   const hooks: HookCandidate[] = [];
   const tabs: TabInfo[] = [];
@@ -619,7 +732,9 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
   const filteredHooks = hooks.filter((h) => {
     if (h.apis && h.apis.length > 0) return true;
     const fileName = h.filePath ? basename(h.filePath) : '';
-    return fileName === 'hooks.ts' || fileName === 'hooks.tsx';
+    if (fileName !== 'hooks.ts' && fileName !== 'hooks.tsx') return false;
+    // Skip event handler wrapper hooks even in hooks.ts (e.g. usePBomSearchFormValueChange)
+    return !isEventHandlerWrapperHook(h.name);
   });
 
   // Extract action callbacks (e.g. onDelete, onArchive) from custom hooks.
@@ -630,7 +745,7 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
   }
 
   // Enhance custom button components by reading their source code
-  await enhanceCustomButtonSnippets(buttons, pageDir);
+  await enhanceCustomButtonSnippets(buttons, pageDir, options?.labelMap);
 
   // Extract permission identifiers from auth files
   const permissions = extractPermissions(pageDir);
@@ -647,7 +762,11 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
  * `name` if the button doesn't already have one, so that the generated
  * button-area.md shows a human-readable name instead of the component class name.
  */
-async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: string): Promise<void> {
+async function enhanceCustomButtonSnippets(
+  buttons: ButtonCandidate[],
+  pageDir: string,
+  labelMap?: Record<string, string>,
+): Promise<void> {
   for (const btn of buttons) {
     // Skip standard button elements
     if (BUTTON_ELEMENT_NAMES.has(btn.element) || !/[Bb]utton/.test(btn.element)) continue;
@@ -685,11 +804,35 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
       const innerBtnMatch = raw.match(/Button\.([A-Za-z]+)/);
       if (innerBtnMatch) {
         hints.push(`InnerButton: Button.${innerBtnMatch[1]}`);
+      }
 
-        // Infer human-readable name from known Button.* patterns
-        if (!btn.name) {
-          btn.name = inferNameFromButtonVariant(innerBtnMatch[1]);
+      // Translated texts (first 3 unique ones)
+      const trMatches = raw.matchAll(/tr\(['"`]([^'"`]+)['"`]\)/g);
+      const texts = new Set<string>();
+      for (const m of trMatches) {
+        texts.add(m[1]);
+        if (texts.size >= 3) break;
+      }
+      if (texts.size > 0) {
+        const textArray = Array.from(texts);
+        hints.push(`Labels: ${textArray.join(' | ')}`);
+
+        // Prefer a concise translated label (typical button labels are short).
+        // Longer texts and message-like texts are usually tooltips/messages.
+        const messageLikePattern = /不能|没有|请|已经|成功|失败|数据|体现|最新|选择.*并/;
+        const conciseLabel = textArray.find(
+          (t) => t.length <= 12 && !messageLikePattern.test(t),
+        );
+        if (!btn.name && conciseLabel) {
+          btn.name = conciseLabel;
         }
+      }
+
+      // Infer from custom component element name if still unnamed
+      // (e.g. PreferredLibraryButton → 按优选库新增, AsyncButton → 异步操作)
+      if (!btn.name) {
+        const variant = innerBtnMatch ? innerBtnMatch[1] : btn.element;
+        btn.name = inferNameFromButtonVariant(variant, labelMap);
       }
 
       // API calls inside the component
@@ -722,22 +865,6 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
         btn.confirm = '是';
       }
 
-      // Translated texts (first 3 unique ones)
-      const trMatches = raw.matchAll(/tr\(['"`]([^'"`]+)['"`]\)/g);
-      const texts = new Set<string>();
-      for (const m of trMatches) {
-        texts.add(m[1]);
-        if (texts.size >= 3) break;
-      }
-      if (texts.size > 0) {
-        hints.push(`Labels: ${Array.from(texts).join(' | ')}`);
-
-        // Use first translated text as button name if still unnamed
-        if (!btn.name) {
-          btn.name = Array.from(texts)[0];
-        }
-      }
-
       if (hints.length > 0) {
         btn.snippet = `${btn.snippet}\n// Component hints from ${btn.element}:\n// ${hints.join('\n// ')}`;
       }
@@ -749,10 +876,14 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
 
 /**
  * Map Button.* variant names to human-readable Chinese labels.
- * Covers the common patterns used in gant-procomponents.
+ * Covers generic UI action patterns only. Project-specific mappings can be
+ * supplied via the optional `labelMap` parameter.
  */
-function inferNameFromButtonVariant(variant: string): string | undefined {
-  const map: Record<string, string> = {
+function inferNameFromButtonVariant(
+  variant: string,
+  labelMap?: Record<string, string>,
+): string | undefined {
+  const defaultMap: Record<string, string> = {
     // Add variants
     PrimaryAdd: '新增',
     GradientPrimaryAdd: '新增',
@@ -792,12 +923,21 @@ function inferNameFromButtonVariant(variant: string): string | undefined {
     Action: '操作',
   };
 
+  const map = labelMap ? { ...defaultMap, ...labelMap } : defaultMap;
+
   // Exact match first
   if (map[variant]) return map[variant];
 
   // Prefix match: e.g. "PrimaryExport" -> try "Export"
   for (const [key, label] of Object.entries(map)) {
     if (variant.endsWith(key)) return label;
+  }
+
+  // Infix match: e.g. "PreferredLibraryButton" -> contains "PreferredLibrary"
+  // Only apply to a curated subset to avoid over-matching.
+  const INFIX_KEYS = ['PreferredLibrary', 'PlatformBOM', 'PlatformBom', 'BatchEdit', 'LinkChange', 'CompleteCheck', 'SuitableVehicle', 'CombineManager', 'CombineView', 'ColorView', 'ReferenceCreate', 'ReferenceOtherVehicle'];
+  for (const key of INFIX_KEYS) {
+    if (variant.includes(key) && map[key]) return map[key];
   }
 
   // Suffix heuristic: "GradientPrimaryAdd" -> contains "Add" -> "新增"

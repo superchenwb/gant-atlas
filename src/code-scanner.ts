@@ -224,6 +224,35 @@ export async function scanSchema(schemaFile: string): Promise<{
     }
   }
 
+  // Extract formSchema fields (common in detail pages) using the same approach as searchSchema
+  const formSchemaMatch = raw.match(/export\s+const\s+formSchema[^=]*=\s*\{([\s\S]*?)\};/);
+  if (formSchemaMatch) {
+    const formBody = formSchemaMatch[1];
+    const propRegex = /(\w+):\s*\{/g;
+    let pm: RegExpExecArray | null;
+    let lastEnd = 0;
+    while ((pm = propRegex.exec(formBody)) !== null) {
+      if (pm.index < lastEnd) continue;
+      const start = pm.index + pm[0].length;
+      let braceDepth = 1;
+      let end = start;
+      while (braceDepth > 0 && end < formBody.length) {
+        if (formBody[end] === '{') braceDepth++;
+        else if (formBody[end] === '}') braceDepth--;
+        end++;
+      }
+      lastEnd = end;
+      const block = formBody.slice(start, end - 1);
+      const titleMatch = block.match(/title:\s*(?:tr\()?['"]([^'"]*)['"]/);
+      const ctMatch = block.match(/componentType:\s*(?:tr\()?['"]([^'"]*)['"]/);
+      fields.push({
+        name: pm[1],
+        title: titleMatch ? titleMatch[1] : undefined,
+        componentType: ctMatch ? ctMatch[1] : undefined,
+      });
+    }
+  }
+
   // Extract gridSchema columns by tracking brace depth
   // Supports type annotations: export const gridSchema: ColumnDefs<any> = [...];
   const gridSchemaMatch = raw.match(/export\s+const\s+gridSchema[^=]*=\s*(\[[\s\S]*?\]);/);
@@ -667,6 +696,16 @@ async function scanSchemaAST(
 
         // Support *SearchSchema naming convention (e.g. mbomSearchSchema)
         if (ts.isIdentifier(decl.name) && /searchschema$/i.test(decl.name.text) && decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
+          extractSearchFieldsFromObject(decl.initializer);
+        }
+
+        // formSchema = { ... } (detail pages)
+        if (ts.isIdentifier(decl.name) && decl.name.text === 'formSchema' && decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
+          extractSearchFieldsFromObject(decl.initializer);
+        }
+
+        // Support *FormSchema naming convention (e.g. bomDetailFormSchema)
+        if (ts.isIdentifier(decl.name) && /formschema$/i.test(decl.name.text) && decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
           extractSearchFieldsFromObject(decl.initializer);
         }
 
@@ -1215,6 +1254,7 @@ export async function scanPageDir(
     codeDir?: string;
     pathAliases?: Record<string, string>;
     route?: RouteMapping;
+    labelMap?: Record<string, string>;
   }
 ): Promise<PageCodeInfo> {
   const info: PageCodeInfo = {
@@ -1278,7 +1318,7 @@ export async function scanPageDir(
     }
   }
 
-  const buttonScan = await scanPageButtons(pageDir);
+  const buttonScan = await scanPageButtons(pageDir, { labelMap: options?.labelMap });
   info.buttons = buttonScan.buttons;
   info.hooks = buttonScan.hooks;
   info.tabs = buttonScan.tabs;
