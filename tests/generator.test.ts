@@ -18,6 +18,8 @@ describe('generatePageSkeleton', () => {
     apis: ['simplePageFindListApi', 'simplePageSaveApi'],
     buttons: [],
     hooks: [],
+    tabs: [],
+    permissions: [],
   };
 
   it('generates main.md with title from route', () => {
@@ -82,6 +84,22 @@ describe('generatePageSkeleton', () => {
 
     expect(skeleton.buttonAreaMd).toContain('## 按钮区域');
     expect(skeleton.buttonAreaMd).toContain('| 按钮名称 | 作用域 | 位置 | 显示条件 | 禁用条件 | 点击结果 | 确认弹窗 |');
+  });
+
+  it('generates api-area.md with API list and button associations', () => {
+    const skeleton = generatePageSkeleton(baseInfo);
+
+    expect(skeleton.apiAreaMd).toContain('# 接口区域');
+    expect(skeleton.apiAreaMd).toContain('## 一、接口清单');
+    expect(skeleton.apiAreaMd).toContain('| simplePageFindListApi | 查询 | |');
+    expect(skeleton.apiAreaMd).toContain('| simplePageSaveApi | 保存 | |');
+  });
+
+  it('skips empty api-area when no APIs and no button API calls', () => {
+    const info: PageCodeInfo = { ...baseInfo, apis: [], buttons: [] };
+    const skeleton = generatePageSkeleton(info);
+
+    expect(skeleton.apiAreaMd).toBe('');
   });
 
   it('escapes pipe characters in cell text', () => {

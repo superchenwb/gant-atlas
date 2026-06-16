@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createStore } from '../../src/store/sqlite.js';
+import { createStore, migrate, type Migration } from '../../src/store/sqlite.js';
 import { join } from 'path';
 import { rmSync } from 'fs';
+import Database from 'better-sqlite3';
 
 describe('SQLite Store v3 (unified graph)', () => {
   const dbPath = join(process.cwd(), 'tests', 'test-v3.db');
@@ -86,5 +87,67 @@ describe('SQLite Store v3 (unified graph)', () => {
 
     const nodes = store.listAllNodes();
     expect(nodes[0].name).toBe('p1-updated');
+  });
+
+  it('records migration history', () => {
+    const db = new Database(dbPath);
+    const rows = db.prepare('SELECT version, name FROM __migrations ORDER BY version').all() as Array<{
+      version: number;
+      name: string;
+    }>;
+    db.close();
+
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    expect(rows[0].version).toBe(1);
+    expect(rows[0].name).toBe('unified_graph');
+    expect(rows[rows.length - 1].version).toBe(3);
+  });
+
+  it('supports downgrade migrations', () => {
+    const migrateDbPath = join(process.cwd(), 'tests', 'test-migrate.db');
+    const db = new Database(migrateDbPath);
+
+    const testMigrations: Migration[] = [
+      {
+        version: 1,
+        name: 'test_create_table',
+        up(db) {
+          db.exec('CREATE TABLE IF NOT EXISTS test_table (id TEXT PRIMARY KEY)');
+        },
+        down(db) {
+          db.exec('DROP TABLE IF EXISTS test_table');
+        },
+      },
+      {
+        version: 2,
+        name: 'test_add_column',
+        up(db) {
+          db.exec('ALTER TABLE test_table ADD COLUMN value TEXT');
+        },
+        down(db) {
+          // SQLite does not support DROP COLUMN directly; recreate table.
+          db.exec(`
+            CREATE TABLE test_table_new (id TEXT PRIMARY KEY);
+            INSERT INTO test_table_new(id) SELECT id FROM test_table;
+            DROP TABLE test_table;
+            ALTER TABLE test_table_new RENAME TO test_table;
+          `);
+        },
+      },
+    ];
+
+    migrate(db, 2, testMigrations);
+    expect(
+      db.prepare("SELECT COUNT(*) as c FROM pragma_table_info('test_table') WHERE name = 'value'").get() as { c: number }
+    ).toEqual({ c: 1 });
+
+    migrate(db, 1, testMigrations);
+    expect(
+      db.prepare("SELECT COUNT(*) as c FROM pragma_table_info('test_table') WHERE name = 'value'").get() as { c: number }
+    ).toEqual({ c: 0 });
+
+    db.close();
+
+    try { rmSync(migrateDbPath); } catch { /* ignore */ }
   });
 });

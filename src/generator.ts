@@ -6,6 +6,7 @@ export interface GeneratedSkeleton {
   searchAreaMd: string;
   gridAreaMd: string;
   buttonAreaMd: string;
+  apiAreaMd: string;
 }
 
 function escapeMdCell(text: string): string {
@@ -15,6 +16,52 @@ function escapeMdCell(text: string): string {
 function formatComponentType(field: SchemaField | SchemaColumn): string {
   if (field.componentType) return field.componentType;
   return 'Input';
+}
+
+function generateApiAreaMd(info: PageCodeInfo): string {
+  if (info.apis.length === 0 && info.buttons.length === 0) return '';
+
+  const lines: string[] = ['# 接口区域', ''];
+
+  if (info.apis.length > 0) {
+    lines.push('## 一、接口清单');
+    lines.push('');
+    lines.push('| 接口名称 | 场景分类 | 说明 |');
+    lines.push('|----------|----------|------|');
+
+    for (const api of info.apis) {
+      const scenario = inferApiScenario(api);
+      lines.push(`| ${escapeMdCell(api)} | ${escapeMdCell(scenario ?? '其他')} | |`);
+    }
+    lines.push('');
+  }
+
+  const buttonsWithApis = (info.buttons ?? []).filter((b) => b.apiCalls && b.apiCalls.length > 0);
+  if (buttonsWithApis.length > 0) {
+    lines.push('## 二、接口与按钮关联');
+    lines.push('');
+    lines.push('| 按钮名称 | 调用的接口 | 说明 |');
+    lines.push('|----------|-----------|------|');
+    for (const btn of buttonsWithApis) {
+      const name = escapeMdCell(btn.name ?? btn.element ?? '');
+      const apis = escapeMdCell(btn.apiCalls!.join(', '));
+      lines.push(`| ${name} | ${apis} | |`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+function inferApiScenario(apiName: string): string | undefined {
+  const lower = apiName.toLowerCase();
+  if (/find|list|query|search|get/.test(lower)) return '查询';
+  if (/save|create|update|add|batchsave/.test(lower)) return '保存';
+  if (/delete|remove|del/.test(lower)) return '删除';
+  if (/export/.test(lower)) return '导出';
+  if (/import/.test(lower)) return '导入';
+  if (/link|bind/.test(lower)) return '关联';
+  return undefined;
 }
 
 export function generatePageSkeleton(
@@ -28,6 +75,7 @@ export function generatePageSkeleton(
     searchAreaMd: generateSearchAreaMd(info.fields),
     gridAreaMd: generateGridAreaMd(info.columns),
     buttonAreaMd: generateButtonAreaMd(info.buttons ?? []),
+    apiAreaMd: generateApiAreaMd(info),
   };
 }
 
@@ -47,6 +95,40 @@ function generateMainMd(pageTitle: string, info: PageCodeInfo, routeMapping?: Ro
     lines.push('');
     for (const api of info.apis) {
       lines.push(`- ${api}`);
+    }
+    lines.push('');
+  }
+
+  if (info.hooks.length > 0) {
+    lines.push('## Hook 列表');
+    lines.push('');
+    lines.push('| Hook 名称 | 调用的接口 |');
+    lines.push('|-----------|-----------|');
+    for (const hook of info.hooks) {
+      const apis = hook.apis.length > 0 ? hook.apis.join(', ') : '';
+      lines.push(`| ${escapeMdCell(hook.name)} | ${escapeMdCell(apis)} |`);
+    }
+    lines.push('');
+  }
+
+  if (info.tabs.length > 0) {
+    lines.push('## Tab 列表');
+    lines.push('');
+    lines.push('| 标签 | Key |');
+    lines.push('|------|-----|');
+    for (const tab of info.tabs) {
+      lines.push(`| ${escapeMdCell(tab.label)} | ${escapeMdCell(tab.key)} |`);
+    }
+    lines.push('');
+  }
+
+  if (info.permissions.length > 0) {
+    lines.push('## 权限列表');
+    lines.push('');
+    lines.push('| 权限标识 |');
+    lines.push('|----------|');
+    for (const perm of info.permissions) {
+      lines.push(`| ${escapeMdCell(perm)} |`);
     }
     lines.push('');
   }

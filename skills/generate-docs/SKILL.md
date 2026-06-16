@@ -28,6 +28,7 @@ argument-hint: ["[project-id] [--module <module>] [--page <pageId>] [--full]"]
 > `[阶段 1.5/7] 过滤未变更页面...`
 > `[阶段 2/7] 提取页面上下文（第 N/M 页）...`
 > `[阶段 3/7] 通过子 Agent 写入 Markdown（第 N/B 批）...`
+> `[阶段 3.5/7] Sync Hook：对比代码与清单差异...`
 > `[阶段 4/7] 合并生成的文档...`
 > `[阶段 5/7] 审阅输出...`
 > `[阶段 6/7] 保存元数据与报告...`
@@ -267,6 +268,36 @@ node "$PLUGIN_ROOT/skills/generate-docs/scripts/extract-page-context.mjs" \
 等待所有子 Agent 完成。收集其 JSON 摘要。
 
 如子 Agent 失败，用相同上下文重试一次。如再次失败，记录警告并继续；部分输出优于无输出。
+
+---
+
+## 阶段 3.5 — Sync Hook（可选）
+
+报告：`[阶段 3.5/7] Sync Hook：对比代码与清单差异...`
+
+对于每个在阶段 3 生成或更新了 Markdown 的页面，运行 Sync Hook 对比代码扫描结果与当前功能清单：
+
+```bash
+for pageId in $PAGES; do
+  node "$PLUGIN_ROOT/skills/generate-docs/scripts/sync-page.mjs" \
+    "$docsPath" \
+    "$dbPath" \
+    "$codeDir" \
+    "$routesFile" \
+    "$pageId" \
+    > "$INTERMEDIATE/sync-$pageId.json"
+done
+```
+
+**前提条件**：项目配置 `projects.json` 中包含 `dbPath`。
+
+Sync Hook 的行为：
+1. 扫描页面代码生成当前 skeleton。
+2. 读取现有 `feature-docs/<module>/<page>/` 下的 Markdown。
+3. 生成结构化 diff 并写入 `.gant-atlas/sync-outbox/<pageId>.json`。
+4. 不自动覆盖功能清单文件；差异等待人工审核或 `--apply-pending` 应用。
+
+进度报告：`Sync Hook 完成：N 个页面有变更，M 个页面无变更。`
 
 ---
 

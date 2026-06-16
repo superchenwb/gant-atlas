@@ -7,6 +7,8 @@ import { createStore } from '../store/sqlite.js';
 import { buildMapping, scanRoutes, scanPageDir, resolveComponentPath } from '../code-scanner.js';
 import { generatePageSkeleton } from '../generator.js';
 import { runConsistencyChecks } from '../mcp/tools/check-consistency.js';
+import { diffSkeletons, type SyncDiff } from '../sync/diff.js';
+import { SyncOutbox, type PendingSyncRecord } from '../sync/outbox.js';
 import { validateStandardPage } from '../validation/page.js';
 import type { CodeToSpecMapping } from '../code-scanner.js';
 import type { GraphNode, GraphEdge } from '../types/graph.js';
@@ -393,6 +395,117 @@ export function runManifest(dbPath: string): ManifestResult {
   };
 }
 
+export interface SyncOptions {
+  docsPath: string;
+  dbPath: string;
+  codeDir: string;
+  routesFile: string;
+  pageId?: string;
+  listPending?: boolean;
+  applyPending?: boolean;
+}
+
+export interface SyncResult {
+  type: 'diff' | 'list' | 'apply';
+  pageId?: string;
+  diff?: SyncDiff;
+  pending?: PendingSyncRecord[];
+  applied?: string[];
+}
+
+function parsePageId(pageId: string): { module: string; pageName: string } {
+  const parts = pageId.split('/');
+  if (parts.length !== 2) {
+    throw new Error(`Invalid pageId "${pageId}". Expected format: module/pageName`);
+  }
+  return { module: parts[0], pageName: parts[1] };
+}
+
+function loadExistingSkeleton(docsPath: string, module: string, pageName: string) {
+  const pageDir = join(docsPath, module, pageName);
+  const readFile = (name: string) => {
+    const filePath = join(pageDir, name);
+    return existsSync(filePath) ? readFileSync(filePath, 'utf-8') : '';
+  };
+
+  return {
+    mainMd: readFile('main.md'),
+    searchAreaMd: readFile('search-area.md'),
+    gridAreaMd: readFile('grid-area.md'),
+    buttonAreaMd: readFile('button-area.md'),
+    apiAreaMd: readFile('api-area.md'),
+  };
+}
+
+export async function runSync(options: SyncOptions): Promise<SyncResult> {
+  const projectRoot = join(options.docsPath, '..');
+  const outbox = new SyncOutbox({
+    outboxDir: SyncOutbox.resolveOutboxDir(projectRoot),
+    dbPath: options.dbPath,
+  });
+
+  if (options.listPending) {
+    return { type: 'list', pending: outbox.listPending() };
+  }
+
+  if (options.applyPending) {
+    const pending = outbox.listPending();
+    const applied: string[] = [];
+
+    for (const record of pending) {
+      const { module, pageName } = parsePageId(record.pageId);
+      const pageDir = join(options.docsPath, module, pageName);
+
+      for (const fileDiff of record.diff.fileDiffs) {
+        if (!fileDiff.newContent) continue;
+        mkdirSync(pageDir, { recursive: true });
+        writeFileSync(join(pageDir, fileDiff.fileName), fileDiff.newContent, 'utf-8');
+      }
+
+      outbox.markApplied(record.pageId);
+      applied.push(record.pageId);
+    }
+
+    if (applied.length > 0) {
+      await runIngest(options.docsPath, options.dbPath);
+    }
+
+    return { type: 'apply', applied };
+  }
+
+  if (!options.pageId) {
+    throw new Error('pageId is required unless --list-pending or --apply-pending is specified');
+  }
+
+  const { module, pageName } = parsePageId(options.pageId);
+  const routes = await scanRoutes(options.routesFile);
+  const route = routes.find((r) => {
+    const componentPath = resolveComponentPath(r.component, options.codeDir);
+    if (!componentPath) return false;
+    const candidateModule = basename(join(componentPath, '..'));
+    const candidatePage = basename(componentPath);
+    return candidateModule === module && candidatePage === pageName;
+  });
+
+  if (!route) {
+    throw new Error(`Page "${options.pageId}" not found in routes`);
+  }
+
+  const componentPath = resolveComponentPath(route.component, options.codeDir);
+  if (!componentPath) {
+    throw new Error(`Cannot resolve component path for "${options.pageId}"`);
+  }
+
+  const codeInfo = await scanPageDir(componentPath, module, pageName);
+  const newSkeleton = generatePageSkeleton(codeInfo, route);
+  const oldSkeleton = loadExistingSkeleton(options.docsPath, module, pageName);
+  const diff = diffSkeletons(options.pageId, oldSkeleton, newSkeleton);
+
+  outbox.recordPending(options.pageId, diff);
+
+  return { type: 'diff', pageId: options.pageId, diff };
+}
+
 export interface GenerateResult {
   generated: string[];
   skipped: string[];
@@ -429,6 +542,7 @@ export async function runGenerate(options: {
       'search-area.md': skeleton.searchAreaMd,
       'grid-area.md': skeleton.gridAreaMd,
       'button-area.md': skeleton.buttonAreaMd,
+      'api-area.md': skeleton.apiAreaMd,
     };
 
     for (const [fileName, content] of Object.entries(files)) {

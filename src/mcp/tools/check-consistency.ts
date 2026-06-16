@@ -21,7 +21,11 @@ export interface ConsistencyReport {
   summary: string;
 }
 
-export function runConsistencyChecks(store: Store, pageId?: string): ConsistencyReport {
+export function runConsistencyChecks(
+  store: Store,
+  pageId?: string,
+  stalePageIds?: Set<string>
+): ConsistencyReport {
   const issues: ConsistencyIssue[] = [];
 
   const addIssue = (type: string, description: string, suggestion: string) => {
@@ -59,6 +63,64 @@ export function runConsistencyChecks(store: Store, pageId?: string): Consistency
         `页面 "${rawId}" (${p.title}) 缺少 page_type 或 route`,
         '检查 main.md 中的概述表格是否包含页面类型和路径'
       );
+    }
+  }
+
+  // Check stale pages (code changed but docs not synced)
+  const effectiveStaleIds = stalePageIds ?? new Set<string>();
+  for (const p of allPages) {
+    const rawId = p.id.replace(/^page:/, '');
+    if (pageId && rawId !== pageId) continue;
+
+    if (effectiveStaleIds.has(p.id) || (p as { stale?: boolean }).stale) {
+      addIssue(
+        'stale_page',
+        `页面 "${rawId}" (${p.title}) 标记为过期，功能清单可能与代码不同步`,
+        '运行 gant-atlas sync 重新生成 diff 并应用，或检查最近的代码变更是否已同步到 feature-docs'
+      );
+    }
+  }
+
+  // Check buttons that call APIs not present in the graph
+  const apiIds = new Set(allApis.map((a) => a.id));
+  for (const p of allPages) {
+    const rawId = p.id.replace(/^page:/, '');
+    if (pageId && rawId !== pageId) continue;
+
+    const outgoing = edgesFromSource.get(p.id) ?? [];
+    const buttonIds = outgoing
+      .filter((e) => e.type === 'contains' && e.target.startsWith('button:'))
+      .map((e) => e.target);
+
+    for (const buttonId of buttonIds) {
+      const buttonOutgoing = edgesFromSource.get(buttonId) ?? [];
+      for (const e of buttonOutgoing) {
+        if (e.type === 'calls' && !apiIds.has(e.target)) {
+          const button = store.getNodeById(buttonId);
+          addIssue(
+            'button_calls_missing_api',
+            `页面 "${rawId}" 的按钮 "${button?.title || button?.name || buttonId}" 调用了不存在的 API "${e.target}"`,
+            '检查 button-area.md 中的 API 引用是否正确，或重新运行 ingest 同步图谱'
+          );
+        }
+      }
+    }
+  }
+
+  // Check fields that call APIs not present in the graph
+  for (const field of allFields) {
+    const rawPageId = field.id.match(/^field:([^/]+\/[^/]+)/)?.[1];
+    if (pageId && rawPageId !== pageId) continue;
+
+    const outgoing = edgesFromSource.get(field.id) ?? [];
+    for (const e of outgoing) {
+      if (e.type === 'calls' && !apiIds.has(e.target)) {
+        addIssue(
+          'field_calls_missing_api',
+          `字段 "${field.title || field.name}" 调用了不存在的 API "${e.target}"`,
+          '检查 search-area.md 中的 API 引用是否正确，或重新运行 ingest 同步图谱'
+        );
+      }
     }
   }
 
@@ -164,12 +226,17 @@ export async function handleCheckConsistency(store: Store, args: unknown) {
   const pageId = validation.ok ? validation.data.pageId : undefined;
   const docsPath = validation.ok ? validation.data.docsPath : undefined;
 
+  // Capture stale pages before resetting flags
+  const stalePageIds = new Set(
+    store.getStalePages().map((p) => p.id)
+  );
+
   // Reset stale flags for all pages before checking
   for (const p of store.listNodesByType('page')) {
     store.markNodeStale(p.id, false);
   }
 
-  const report = runConsistencyChecks(store, pageId);
+  const report = runConsistencyChecks(store, pageId, stalePageIds);
 
   // 当提供 docsPath 时，额外运行标准页面结构检查
   if (docsPath) {

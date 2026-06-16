@@ -16,10 +16,9 @@
  * Output JSON: PageGenerationContext
  */
 
-import { writeFileSync, readFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { homedir } from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
 // skills/generate-docs/scripts/extract-page-context.mjs -> repo root needs 4 dirname steps
@@ -38,59 +37,6 @@ async function resolveCore() {
   return { ...scanner, ...context };
 }
 
-function loadPathAliases(codeDir) {
-  try {
-    const projectsPath = join(homedir(), '.gant-atlas', 'projects.json');
-    if (!existsSync(projectsPath)) return {};
-    const raw = readFileSync(projectsPath, 'utf-8');
-    const data = JSON.parse(raw);
-    const projects = data.projects || [];
-    const project = projects.find((p) => {
-      const pDir = p.codeDir || '';
-      return (
-        codeDir === pDir ||
-        codeDir.startsWith(pDir + '/') ||
-        pDir.startsWith(codeDir + '/')
-      );
-    });
-    if (project && project.pathAliases) {
-      return project.pathAliases;
-    }
-  } catch {
-    // ignore
-  }
-  return {};
-}
-
-function resolveComponentPath(component, codeDir) {
-  const aliases = loadPathAliases(codeDir);
-  const entries = Object.entries(aliases);
-
-  // Sort by prefix length descending so longer matches take priority
-  entries.sort((a, b) => b[0].length - a[0].length);
-
-  for (const [prefix, base] of entries) {
-    if (component.startsWith(prefix)) {
-      const fullPath = join(codeDir, base, component.slice(prefix.length));
-      try {
-        if (statSync(fullPath).isDirectory()) return fullPath;
-      } catch {}
-    }
-  }
-
-  // Legacy fallback for ibom-style paths
-  let cleanPath = component.replace(/^@+/, '');
-  cleanPath = cleanPath.replace(/^ibom(?:\/src)?\//, '');
-  const fullPath = join(codeDir, cleanPath);
-  try {
-    const st = statSync(fullPath);
-    if (st.isDirectory()) return fullPath;
-  } catch {
-    // Not found
-  }
-  return null;
-}
-
 async function main() {
   const [, , codeDir, routesFile, pageId, outputPath] = process.argv;
   if (!codeDir || !routesFile || !pageId || !outputPath) {
@@ -100,7 +46,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { scanRoutes, scanPageDir, buildPageGenerationContext } = await resolveCore();
+  const { scanRoutes, scanPageDir, buildPageGenerationContext, resolveComponentPath, loadPathAliases } = await resolveCore();
   const routes = await scanRoutes(routesFile);
 
   const targetRoute = routes.find((r) => {

@@ -1,0 +1,21 @@
+{
+  "searchFields": [
+    { "name": "userName", "title": "用户名", "componentType": "Input" },
+    { "name": "status", "title": "状态", "componentType": "Select" }
+  ],
+  "gridColumns": [
+    { "fieldName": "userName", "title": "用户名" },
+    { "fieldName": "status", "title": "状态标签" }
+  ],
+  "buttons": [
+    { "name": "新增", "element": "Button" },
+    { "name": "删除", "element": "ActionButton" }
+  ],
+  "apis": ["simplePageFindListApi", "simplePageSaveApi"],
+  "hooks": [
+    { "name": "useSimplePageData", "apis": ["simplePageFindListApi"] },
+    { "name": "useDeleteItem", "apis": ["simplePageSaveApi"] }
+  ],
+  "tabs": [],
+  "permissions": []
+}

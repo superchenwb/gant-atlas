@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, basename, extname, dirname } from 'path';
+import { homedir } from 'os';
 import type { Store } from './store/sqlite.js';
 import { scanPageButtons, type ButtonCandidate, type HookCandidate } from './scanner/button-scanner.js';
 
@@ -1495,27 +1496,81 @@ export async function buildMapping(
 }
 
 /**
+ * 从全局 ~/.gant-atlas/projects.json 加载项目配置中的 pathAliases。
+ * 支持两种 JSON 结构：{ projects: [...] } 或 [...]。
+ */
+export function loadPathAliases(codeDir: string): Record<string, string> {
+  try {
+    const projectsPath = join(homedir(), '.gant-atlas', 'projects.json');
+    if (!statSync(projectsPath).isFile()) return {};
+
+    const raw = readFileSync(projectsPath, 'utf-8');
+    const data = JSON.parse(raw) as { projects?: unknown[] } | unknown[];
+    const projects = Array.isArray(data) ? data : (data.projects ?? []);
+
+    const project = projects.find((p: unknown) => {
+      if (!p || typeof p !== 'object') return false;
+      const { codeDir: pDir } = p as { codeDir?: string };
+      if (typeof pDir !== 'string') return false;
+      return (
+        codeDir === pDir ||
+        codeDir.startsWith(pDir + '/') ||
+        pDir.startsWith(codeDir + '/')
+      );
+    });
+
+    if (
+      project &&
+      typeof project === 'object' &&
+      'pathAliases' in project &&
+      project.pathAliases &&
+      typeof project.pathAliases === 'object'
+    ) {
+      return project.pathAliases as Record<string, string>;
+    }
+  } catch {
+    // Ignore missing or malformed config
+  }
+  return {};
+}
+
+/**
  * 解析组件路径别名到实际路径
  * 例如 @bombusiness/dataauthgroup → codeDir/bombusiness/dataauthgroup
+ *
+ * 解析策略：
+ * 1. 优先使用 ~/.gant-atlas/projects.json 中配置的 pathAliases
+ * 2. 回退到 legacy 行为：去掉 @/@@/ibom 前缀后直接拼接
  */
-function resolveComponentPath(component: string, codeDir: string): string | null {
-  // Remove leading @ or @@ aliases
+export function resolveComponentPath(component: string, codeDir: string): string | null {
+  const aliases = loadPathAliases(codeDir);
+  const sortedAliases = Object.entries(aliases).sort((a, b) => b[0].length - a[0].length);
+
+  for (const [prefix, base] of sortedAliases) {
+    if (component.startsWith(prefix)) {
+      const fullPath = join(codeDir, base, component.slice(prefix.length));
+      try {
+        if (statSync(fullPath).isDirectory()) return fullPath;
+      } catch {
+        // Not found under this alias
+      }
+    }
+  }
+
+  // Legacy fallback
   let cleanPath = component.replace(/^@+/, '');
-  // Remove ibom/src/ or ibom/ prefix if present
   cleanPath = cleanPath.replace(/^ibom(?:\/src)?\//, '');
   const fullPath = join(codeDir, cleanPath);
 
   try {
-    const stat = statSync(fullPath);
-    if (stat.isDirectory()) return fullPath;
+    const st = statSync(fullPath);
+    if (st.isDirectory()) return fullPath;
   } catch {
     // Not found
   }
 
   return null;
 }
-
-export { resolveComponentPath };
 
 // ─── Phase 1: Component + Service scanning enhancements ───
 
