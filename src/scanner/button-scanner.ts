@@ -10,7 +10,8 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, extname } from 'path';
+import { join, extname, basename } from 'path';
+import { isApiFunctionName, extractApiNamesFromText } from './utils.js';
 
 export interface ButtonCandidate {
   /** Button text extracted from JSX children or label/text/title props. */
@@ -46,6 +47,8 @@ export interface HookCandidate {
   line: number;
   /** API names called inside the hook (functions ending with Api). */
   apis: string[];
+  /** Source file path where this hook was defined. */
+  filePath?: string;
 }
 
 export interface TabInfo {
@@ -203,7 +206,7 @@ function collectButtonFromJsxElement(
     function findApiInNode(n: import('typescript').Node) {
       if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
         const name = n.expression.text;
-        if (name.endsWith('Api') && !foundApis.has(name)) {
+        if (isApiFunctionName(name) && !foundApis.has(name)) {
           foundApis.add(name);
         }
       }
@@ -241,7 +244,7 @@ function collectApiCalls(
   function visit(n: import('typescript').Node) {
     if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
       const name = n.expression.text;
-      if (name.endsWith('Api') && !apis.includes(name)) apis.push(name);
+      if (isApiFunctionName(name) && !apis.includes(name)) apis.push(name);
     }
     ts.forEachChild(n, visit);
   }
@@ -300,7 +303,7 @@ async function scanFile(filePath: string): Promise<PageButtonScanResult> {
       const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
       const snippet = node.getText(sourceFile).slice(0, 600);
       const apis = collectApiCalls(ts, node);
-      hooks.push({ name: hookName, snippet, line, apis });
+      hooks.push({ name: hookName, snippet, line, apis, filePath });
     }
 
     // Tab items: extract { label: tr('xxx'), key: 'yyy' } patterns from array/object literals
@@ -485,6 +488,109 @@ function findButtonDirs(dir: string, result: string[], depth = 0): void {
 }
 
 /**
+ * Infer a human-readable button label from an action callback name.
+ */
+const ACTION_LABEL_MAP: Record<string, string> = {
+  ondelete: '删除',
+  onremove: '删除',
+  ondel: '删除',
+  onbomarchived: '归档',
+  onarchive: '归档',
+  onpreview: '预览',
+  onview: '查看',
+  onedit: '编辑',
+  oncreate: '新增',
+  onadd: '新增',
+  onsave: '保存',
+  onsubmit: '提交',
+  oncancel: '取消',
+  oncopy: '复制',
+  onexport: '导出',
+  onimport: '导入',
+  onrestore: '恢复',
+  onrefresh: '刷新',
+  onsearch: '查询',
+  onreset: '重置',
+};
+
+function inferActionLabel(actionName: string): string {
+  const lower = actionName.toLowerCase();
+  return ACTION_LABEL_MAP[lower] ?? actionName;
+}
+
+/**
+ * Extract action callbacks (e.g. const onDelete = useCallback(...)) from a custom hook
+ * and synthesize ButtonCandidate entries for them.
+ *
+ * Many procomponents-based pages pass action callbacks to Grid via `context` prop;
+ * the actual button JSX lives inside the Grid component, not the page source.
+ * This heuristic surfaces those row-level actions.
+ */
+async function extractActionButtonsFromHook(hook: HookCandidate): Promise<ButtonCandidate[]> {
+  if (!hook.filePath) return [];
+
+  let raw: string;
+  try {
+    raw = readFileSync(hook.filePath, 'utf-8');
+  } catch {
+    return [];
+  }
+
+  const buttons: ButtonCandidate[] = [];
+  const ts = await import('typescript');
+  const sourceFile = ts.createSourceFile(
+    hook.filePath,
+    raw,
+    ts.ScriptTarget.Latest,
+    true,
+    extname(hook.filePath) === '.tsx' ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+
+  function visit(node: import('typescript').Node) {
+    // Handle: const onXxx = useCallback(...) or const onXxx = () => { ... }
+    if (ts.isVariableDeclaration(node)) {
+      const candidates: { name: string; initializer: import('typescript').Expression | undefined }[] = [];
+
+      if (ts.isIdentifier(node.name) && /^on[A-Z]\w*$/.test(node.name.text)) {
+        candidates.push({ name: node.name.text, initializer: node.initializer });
+      }
+
+      // Handle destructuring aliases: const { onItemClick: onPreview } = useModalOpen();
+      if (ts.isObjectBindingPattern(node.name)) {
+        for (const element of node.name.elements) {
+          if (
+            ts.isBindingElement(element) &&
+            ts.isIdentifier(element.name) &&
+            /^on[A-Z]\w*$/.test(element.name.text)
+          ) {
+            candidates.push({ name: element.name.text, initializer: node.initializer });
+          }
+        }
+      }
+
+      for (const candidate of candidates) {
+        if (!candidate.initializer) continue;
+        const apis = collectApiCalls(ts, candidate.initializer);
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        buttons.push({
+          name: inferActionLabel(candidate.name),
+          element: 'ContextAction',
+          snippet: node.getText(sourceFile).slice(0, 400),
+          line,
+          filePath: hook.filePath,
+          onClick: candidate.name,
+          apiCalls: apis.length > 0 ? apis : undefined,
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return buttons;
+}
+
+/**
  * Scan a page directory for buttons and hooks.
  *
  * Recursively reads all .ts/.tsx files (excluding well-known non-source files
@@ -508,13 +614,28 @@ export async function scanPageButtons(pageDir: string): Promise<PageButtonScanRe
     }
   }
 
+  // Filter out framework/external hooks that don't call APIs.
+  // Keep hooks that either call APIs or are defined in a dedicated hooks file.
+  const filteredHooks = hooks.filter((h) => {
+    if (h.apis && h.apis.length > 0) return true;
+    const fileName = h.filePath ? basename(h.filePath) : '';
+    return fileName === 'hooks.ts' || fileName === 'hooks.tsx';
+  });
+
+  // Extract action callbacks (e.g. onDelete, onArchive) from custom hooks.
+  // These are often passed to Grid via context prop and rendered as row buttons.
+  for (const hook of filteredHooks) {
+    const actionButtons = await extractActionButtonsFromHook(hook);
+    buttons.push(...actionButtons);
+  }
+
   // Enhance custom button components by reading their source code
   await enhanceCustomButtonSnippets(buttons, pageDir);
 
   // Extract permission identifiers from auth files
   const permissions = extractPermissions(pageDir);
 
-  return { buttons, hooks, tabs, permissions };
+  return { buttons, hooks: filteredHooks, tabs, permissions };
 }
 
 /**
@@ -572,19 +693,17 @@ async function enhanceCustomButtonSnippets(buttons: ButtonCandidate[], pageDir: 
       }
 
       // API calls inside the component
-      const apiMatches = raw.matchAll(/(\w+Api)\(/g);
-      const apis = new Set<string>();
-      for (const m of apiMatches) apis.add(m[1]);
-      if (apis.size > 0) {
-        hints.push(`APIs: ${Array.from(apis).join(', ')}`);
+      const apiNames = extractApiNamesFromText(raw);
+      if (apiNames.length > 0) {
+        hints.push(`APIs: ${apiNames.join(', ')}`);
 
         // Promote API calls to onClick hint if no onClick was captured
         if (!btn.onClick) {
-          btn.onClick = Array.from(apis).join(', ');
+          btn.onClick = apiNames.join(', ');
         }
         // Also populate apiCalls for button→API mapping
         if (!btn.apiCalls || btn.apiCalls.length === 0) {
-          btn.apiCalls = Array.from(apis);
+          btn.apiCalls = apiNames;
         }
       }
 

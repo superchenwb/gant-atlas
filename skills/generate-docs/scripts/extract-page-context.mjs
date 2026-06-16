@@ -81,13 +81,42 @@ async function main() {
   });
   const context = buildPageGenerationContext(codeInfo, targetRoute);
 
-  // 页面类型检测
-  context.pageType = detectPageType(pageDir);
+  // 页面类型检测：优先使用扫描器推断的结果，回退到路径启发式
+  context.pageType = codeInfo.pageType ?? detectPageType(pageDir);
 
-  // Post-process: extract hook usages from index.tsx to supplement scanPageButtons
+  // Post-process: extract hook usages from index.tsx to supplement scanPageButtons.
+  // Only keep hooks imported from local files; skip framework hooks (procomponents, react, etc.).
   const mainFile = join(pageDir, 'index.tsx');
   try {
     const indexContent = readFileSync(mainFile, 'utf-8');
+    const externalLibs = new Set([
+      'react',
+      'react-dom',
+      'procomponents',
+      'lodash-es',
+      'lodash',
+      '@gant/',
+      '@ant-design',
+      'antd',
+    ]);
+
+    // Build map: hookName -> import source
+    const hookImportMap = new Map();
+    const importRegex = /import\s*\{([^}]+)\}\s*from\s+['"]([^'"]+)['"]/g;
+    let im;
+    while ((im = importRegex.exec(indexContent)) !== null) {
+      const source = im[2];
+      const isExternal = externalLibs.some((lib) => source === lib || source.startsWith(`${lib}/`));
+      if (isExternal) {
+        const names = im[1].split(',').map((n) => n.trim().split(/\s+as\s+/).pop());
+        for (const name of names) {
+          if (/^use[A-Z]\w*$/.test(name)) {
+            hookImportMap.set(name, source);
+          }
+        }
+      }
+    }
+
     const usedHooks = new Set();
     const hookRegex = /\b(use[A-Z]\w+)\s*\(/g;
     let hm;
@@ -107,6 +136,8 @@ async function main() {
       ) {
         continue;
       }
+      // Skip hooks known to come from external libraries
+      if (hookImportMap.has(hookName)) continue;
       usedHooks.add(hookName);
     }
     for (const hookName of usedHooks) {

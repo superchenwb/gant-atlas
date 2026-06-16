@@ -265,6 +265,7 @@ export function buildPageGenerationContext(
     title: route.title,
     module: info.module,
     pageName: info.pageName,
+    pageType: info.pageType,
     searchFields: info.fields,
     gridColumns: info.columns,
     apis: info.apis,

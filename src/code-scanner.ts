@@ -3,6 +3,7 @@ import { join, basename, extname, dirname } from 'path';
 import { homedir } from 'os';
 import type { Store } from './store/sqlite.js';
 import { scanPageButtons, type ButtonCandidate, type HookCandidate } from './scanner/button-scanner.js';
+import { isApiFunctionName } from './scanner/utils.js';
 
 export interface RouteMapping {
   path: string;
@@ -43,6 +44,7 @@ export interface PageCodeInfo {
   module: string;
   pageName: string;
   route?: string;
+  pageType?: 'page-main' | 'page-detail';
   fields: SchemaField[];
   columns: SchemaColumn[];
   apis: string[];
@@ -721,12 +723,13 @@ export async function scanServices(servicesFile: string): Promise<string[]> {
 
   // Match: export const dataAuthGroupFindListApi = ...
   // or: export function dataAuthGroupFindListApi(...)
-  // or: const dataAuthGroupFindListApi = ...
-  const apiRegex = /(?:export\s+)?(?:const|function)\s+([a-z][a-zA-Z0-9]*Api)\s*(?:=|\()/g;
+  // or: const deleteByIdAPI = ...
+  const apiRegex = /(?:export\s+)?(?:const|function)\s+([a-zA-Z][a-zA-Z0-9]*(?:Api|API))\s*(?:=|\()/g;
 
   let m: RegExpExecArray | null;
   while ((m = apiRegex.exec(raw)) !== null) {
-    if (!apis.includes(m[1])) apis.push(m[1]);
+    const name = m[1];
+    if (isApiFunctionName(name) && !apis.includes(name)) apis.push(name);
   }
 
   // AST fallback when regex yields nothing
@@ -742,20 +745,20 @@ async function scanServicesAST(raw: string): Promise<string[]> {
   const apis: string[] = [];
 
   function visit(node: import('typescript').Node) {
-    // export function xxxApi(...)
+    // export function xxxApi(...) or xxxAPI(...)
     if (ts.isFunctionDeclaration(node) && node.name) {
       const name = node.name.text;
-      if (name.endsWith('Api') && name[0] >= 'a' && name[0] <= 'z' && !apis.includes(name)) {
+      if (isApiFunctionName(name) && name[0] >= 'a' && name[0] <= 'z' && !apis.includes(name)) {
         apis.push(name);
       }
     }
 
-    // export const xxxApi = ...
+    // export const xxxApi = ... or xxxAPI = ...
     if (ts.isVariableStatement(node)) {
       for (const decl of node.declarationList.declarations) {
         if (ts.isIdentifier(decl.name)) {
           const name = decl.name.text;
-          if (name.endsWith('Api') && name[0] >= 'a' && name[0] <= 'z' && !apis.includes(name)) {
+          if (isApiFunctionName(name) && name[0] >= 'a' && name[0] <= 'z' && !apis.includes(name)) {
             apis.push(name);
           }
         }
@@ -881,10 +884,10 @@ function isSchemaContent(content: string): boolean {
 
 /**
  * Detect if file content contains API function definitions.
- * Looks for exports matching `xxxApi` naming convention.
+ * Looks for exports matching xxxApi / xxxAPI naming convention.
  */
 function isServicesContent(content: string): boolean {
-  return /(?:export\s+)?(?:const|function)\s+[a-z][a-zA-Z0-9]*Api\s*(?:=|\()/.test(content);
+  return /(?:export\s+)?(?:const|function)\s+[a-zA-Z][a-zA-Z0-9]*(?:Api|API)\s*(?:=|\()/.test(content);
 }
 
 /**
@@ -1211,6 +1214,7 @@ export async function scanPageDir(
   options?: {
     codeDir?: string;
     pathAliases?: Record<string, string>;
+    route?: RouteMapping;
   }
 ): Promise<PageCodeInfo> {
   const info: PageCodeInfo = {
@@ -1325,7 +1329,45 @@ export async function scanPageDir(
     }
   }
 
+  // Infer page type from code structure
+  info.pageType = inferPageType(info, options?.route);
+
   return info;
+}
+
+/**
+ * Infer the page type from code structure.
+ *
+ * Heuristics:
+ * - page-main: has grid columns (list/table view), optionally with search fields.
+ * - page-detail: has form fields but no grid columns, or route contains detail/edit/view.
+ */
+function inferPageType(
+  info: PageCodeInfo,
+  route?: RouteMapping
+): 'page-main' | 'page-detail' | undefined {
+  const hasColumns = info.columns.length > 0;
+  const hasFields = info.fields.length > 0;
+  const routePath = route?.path ?? info.route ?? '';
+
+  // Detail pages often have detail/edit/view in their route
+  const detailRoutePattern = /\/(?:detail|edit|view|info)|\bdetail\b|\bedit\b|\bview\b/i;
+  if (detailRoutePattern.test(routePath) && !hasColumns) {
+    return 'page-detail';
+  }
+
+  // Main list page: has grid columns
+  if (hasColumns) {
+    return 'page-main';
+  }
+
+  // Form-only page without grid: could be detail or search-only
+  // Default to detail if route suggests it, otherwise undefined
+  if (hasFields && detailRoutePattern.test(routePath)) {
+    return 'page-detail';
+  }
+
+  return undefined;
 }
 
 /**
@@ -1381,7 +1423,7 @@ export async function buildMapping(
     matchedCodeDirs.add(componentPath);
 
     // Scan code for this page
-    const codeInfo = await scanPageDir(componentPath, moduleName, pageName);
+    const codeInfo = await scanPageDir(componentPath, moduleName, pageName, { route });
 
     // Get spec info from nodes/edges
     const pageEdges = store.getEdgesFromSource(specPage.id);
@@ -1711,11 +1753,12 @@ function scanServicesFile(filePath: string): string[] {
   const raw = readFileSync(filePath, 'utf-8');
   const apis: string[] = [];
 
-  const apiRegex = /(?:export\s+)?(?:const|function)\s+([a-z][a-zA-Z0-9]*Api)\s*(?:=|\()/g;
+  const apiRegex = /(?:export\s+)?(?:const|function)\s+([a-zA-Z][a-zA-Z0-9]*(?:Api|API))\s*(?:=|\()/g;
 
   let m: RegExpExecArray | null;
   while ((m = apiRegex.exec(raw)) !== null) {
-    if (!apis.includes(m[1])) apis.push(m[1]);
+    const name = m[1];
+    if (isApiFunctionName(name) && !apis.includes(name)) apis.push(name);
   }
 
   return apis;

@@ -3,6 +3,7 @@ import { join } from 'path';
 import { scanPageButtons } from '../../src/scanner/button-scanner.js';
 
 const FIXTURES_DIR = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'simple-page');
+const ACTION_CALLBACK_DIR = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'action-callback-page');
 
 describe('scanPageButtons', () => {
   it('extracts button candidates from TSX page files', async () => {
@@ -42,5 +43,24 @@ describe('scanPageButtons', () => {
     const result = await scanPageButtons(join(process.cwd(), 'tests', 'fixtures', 'not-real'));
     expect(result.buttons).toEqual([]);
     expect(result.hooks).toEqual([]);
+  });
+
+  it('extracts action callbacks from hooks.ts as synthetic buttons', async () => {
+    const result = await scanPageButtons(ACTION_CALLBACK_DIR);
+
+    const deleteBtn = result.buttons.find((b) => b.name === '删除');
+    expect(deleteBtn).toBeDefined();
+    expect(deleteBtn?.element).toBe('ContextAction');
+    expect(deleteBtn?.apiCalls).toContain('deleteByIdAPI');
+
+    const archiveBtn = result.buttons.find((b) => b.name === '归档');
+    expect(archiveBtn).toBeDefined();
+    expect(archiveBtn?.apiCalls).toContain('updateVehicleStatusAPI');
+
+    const previewBtn = result.buttons.find((b) => b.name === '预览');
+    expect(previewBtn).toBeDefined();
+
+    // Framework hooks imported from procomponents should be filtered out
+    expect(result.hooks.some((h) => h.name === 'useModalOpen')).toBe(false);
   });
 });
