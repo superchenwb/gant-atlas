@@ -63,12 +63,16 @@ export interface PageGenerationContext {
     dependencies?: string[];
     /** Raw source text of the onDependenciesChange handler (arrow function or function expression). */
     onDependenciesChange?: string;
+    /** 字段所属分组（如 baseInfo / vppsInfo），由 LLM fallback 补充 */
+    group?: string;
   }>;
   gridColumns: Array<{
     fieldName: string;
     title?: string;
     componentType?: string;
     options?: Record<string, unknown>;
+    /** 列所属分组（复杂表格的分组），由 LLM fallback 补充 */
+    group?: string;
   }>;
   apis: string[];
   buttons: CompactButton[];

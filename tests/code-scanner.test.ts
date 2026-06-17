@@ -6,6 +6,7 @@ import {
   scanPageDir,
   resolveComponentPath,
 } from '../src/code-scanner.js';
+import type { LlmClient } from '../src/llm/client.js';
 import { join } from 'path';
 
 import { createStore } from '../src/store/sqlite.js';
@@ -159,6 +160,34 @@ describe('scanPageDir', () => {
 
     expect(info.apis).toContain('deleteByIdAPI');
     expect(info.apis).toContain('updateVehicleStatusAPI');
+  });
+
+  it('uses LLM fallback for dynamic schema when static extraction is empty', async () => {
+    const pageDir = join(process.cwd(), 'tests', 'fixtures', 'test-module', 'dynamic-detail-page');
+    const client: LlmClient = {
+      async complete() {
+        return JSON.stringify({
+          fields: [
+            { name: 'code', title: '编码', componentType: 'Input' },
+            { name: 'name', title: '名称', componentType: 'Input' },
+            { name: 'effectiveDate', title: '生效日期', componentType: 'DatePicker' },
+          ],
+          columns: [],
+          notes: ['LLM 动态提取'],
+        });
+      },
+    };
+
+    const info = await scanPageDir(pageDir, 'test-module', 'dynamic-detail-page', {
+      enableLlmFallback: true,
+      llmClient: client,
+      route: { path: '/dynamic-detail/edit', component: '@dynamic-detail-page' },
+    });
+
+    expect(info.pageType).toBe('page-detail');
+    expect(info.fields.map((f) => f.name)).toContain('code');
+    expect(info.fields.map((f) => f.name)).toContain('effectiveDate');
+    expect(info.notes?.some((n) => n.includes('LLM fallback 提取到'))).toBe(true);
   });
 });
 

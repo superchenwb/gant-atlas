@@ -57,8 +57,9 @@ This file is the **project command center** for both AI agents and the human arc
 | T6 Consistency Check 增强 | P1 | ✅ | 11 项检查规则 |
 | T7 联邦查询层 | P2 | ✅ | 3 个测试 |
 | T8 Schema Migration 框架 | P3 | ✅ | up/downgrade 测试 |
+| **T9 动态 schema LLM fallback（bomdetail 详情页字段提取）** | **P0** | **✅** | **6 个单元测试 + yadea-bom bomdetail 手工验证（2026-06-17）** |
 
-**测试总览**：36 个测试文件，246 个测试用例，全部通过。TypeScript strict 模式零错误。
+**测试总览**：37 个测试文件，253 个测试用例，全部通过。TypeScript strict 模式零错误。
 
 **阻塞项**：无。Phase 1 全部完成，可进入 Phase 2 规划。
 
@@ -78,6 +79,12 @@ This file is the **project command center** for both AI agents and the human arc
   - 按钮名称提取改进（仅 1 个 None 残留）✅
   - 项目特定按钮标签移到 `button-label-map.json` 配置 ✅
   - 剩余挑战：详情页动态 schema（如 bomdetail）需要 LLM fallback
+- 2026-06-17 实现并验证动态 schema LLM fallback：
+  - `bombasic/bomdetail` 详情页静态扫描字段为 0，启用 fallback 后提取到 **85 个字段**，并按 `baseInfo/vppsInfo/changeInfo/...` 分组 ✅
+  - fallback 触发条件：静态字段/列为空且检测到 `get/use...Schema` 动态函数，避免浪费 token ✅
+  - 支持递归搜索子目录 schema 文件（如 `base/schema/index.ts`）✅
+  - 新增 `src/llm/client.ts`、`src/scanner/llm-schema-extractor.ts`、`tests/fixtures/test-module/dynamic-detail-page` 等测试覆盖 ✅
+  - 无 LLM 客户端时静默降级，保证 CI/离线环境可用 ✅
 
 ---
 
@@ -220,7 +227,9 @@ feature-docs/ (每页面一个目录，含多个 .md 文件)
 | **MCP Server** | `src/mcp/server.ts` | MCP Server 入口，注册 11 个工具 |
 | **MCP Tools** | `src/mcp/tools/*.ts` | 11 个工具：`get_page_spec`, `search_pages`, `analyze_impact`, `check_consistency`, `list_projects`, `explore_context`, `find_dead_apis`, `get_call_graph`, `generate_page_spec`, `get_page_generation_context`, `list_entries` |
 | **CLI** | `src/cli/actions.ts`, `src/index.ts` | 10 个命令：`ingest`, `mcp serve`, `query page`, `map`, `validate`, `generate`, `sync`, `manifest`, `status`, `setup` |
-| **Code Scanner** | `src/code-scanner.ts` | 前端代码扫描：`scanRoutes()` / `scanSchema()` / `scanServices()`，regex + AST fallback |
+| **Code Scanner** | `src/code-scanner.ts` | 前端代码扫描：`scanRoutes()` / `scanSchema()` / `scanServices()`，regex + AST fallback，**新增 LLM fallback 提取动态 schema** |
+| **LLM Client** | `src/llm/client.ts` | 通用 LLM 客户端，默认 Anthropic Messages API（兼容 Kimi/Claude） |
+| **Dynamic Schema Extractor** | `src/scanner/llm-schema-extractor.ts` | 动态 schema 函数（如 `getBomFormSchema`）的 LLM fallback 提取器 |
 | **Generator** | `src/generator.ts`, `src/generator/context.ts` | 从 `PageCodeInfo` 生成 Markdown 骨架，支持 api-area + hook/tab/permission 表格 |
 | **Sync** | `src/sync/diff.ts`, `src/sync/llm-diff.ts`, `src/sync/outbox.ts` | Diff 生成（确定性 + LLM 辅助）+ outbox 管理（pending/rejected/applied） |
 | **Federation** | `src/query/federation.ts` | 联邦查询层，多项目内存聚合 |
@@ -244,7 +253,7 @@ feature-docs/ (每页面一个目录，含多个 .md 文件)
 
 - 框架：**vitest**，`globals: true`
 - 测试目录结构镜像 `src/`
-- `tests/fixtures/` 包含 4 种页面类型测试数据：`simple-page/`, `kv-page/`, `custom-page/`, `rich-schema-page/`
+- `tests/fixtures/` 包含 5 种页面类型测试数据：`simple-page/`, `kv-page/`, `custom-page/`, `rich-schema-page/`, `dynamic-detail-page/`
 - MCP 测试用 `InMemoryTransport.createLinkedPair()` + `Client`（见 `tests/mcp/server.test.ts`）
 - SQLite 临时文件 (`*.db-shm`, `*.db-wal`) 和 `coverage/` 已被 `.gitignore` 忽略
 

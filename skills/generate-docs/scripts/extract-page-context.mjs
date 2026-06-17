@@ -27,6 +27,7 @@ const PLUGIN_ROOT = dirname(dirname(dirname(dirname(__filename))));
 async function resolveCore() {
   const distPath = join(PLUGIN_ROOT, 'dist', 'code-scanner.js');
   const contextPath = join(PLUGIN_ROOT, 'dist', 'generator', 'context.js');
+  const llmClientPath = join(PLUGIN_ROOT, 'dist', 'llm', 'client.js');
   if (!existsSync(distPath) || !existsSync(contextPath)) {
     throw new Error(
       `Compiled core not found. Run 'pnpm run build' first.`,
@@ -34,7 +35,11 @@ async function resolveCore() {
   }
   const scanner = await import(pathToFileURL(distPath).href);
   const context = await import(pathToFileURL(contextPath).href);
-  return { ...scanner, ...context };
+  let llm = {};
+  if (existsSync(llmClientPath)) {
+    llm = await import(pathToFileURL(llmClientPath).href);
+  }
+  return { ...scanner, ...context, ...llm };
 }
 
 async function main() {
@@ -46,7 +51,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { scanRoutes, scanPageDir, buildPageGenerationContext, resolveComponentPath, loadPathAliases } = await resolveCore();
+  const { scanRoutes, scanPageDir, buildPageGenerationContext, resolveComponentPath, loadPathAliases, createDefaultLlmClient } = await resolveCore();
   const routes = await scanRoutes(routesFile);
 
   const targetRoute = routes.find((r) => {
@@ -76,11 +81,14 @@ async function main() {
 
   const pathAliases = loadPathAliases(codeDir);
   const labelMap = loadButtonLabelMap();
+  const llmClient = typeof createDefaultLlmClient === 'function' ? createDefaultLlmClient() : undefined;
   const codeInfo = await scanPageDir(pageDir, moduleName, pageName, {
     codeDir,
     pathAliases,
     route: targetRoute,
     labelMap,
+    enableLlmFallback: true,
+    llmClient,
   });
   const context = buildPageGenerationContext(codeInfo, targetRoute);
 

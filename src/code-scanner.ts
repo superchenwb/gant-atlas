@@ -4,39 +4,16 @@ import { homedir } from 'os';
 import type { Store } from './store/sqlite.js';
 import { scanPageButtons, type ButtonCandidate, type HookCandidate } from './scanner/button-scanner.js';
 import { isApiFunctionName } from './scanner/utils.js';
+import type { SchemaColumn, SchemaField } from './scanner/types.js';
+import { extractDynamicSchema } from './scanner/llm-schema-extractor.js';
+import type { LlmClient } from './llm/client.js';
+
+export type { SchemaField, SchemaColumn } from './scanner/types.js';
 
 export interface RouteMapping {
   path: string;
   component: string;
   title?: string;
-}
-
-export interface SchemaField {
-  name: string;
-  title?: string;
-  componentType?: string;
-  options?: Record<string, unknown>;
-  required?: boolean | string;
-  placeholder?: string;
-  defaultValue?: unknown;
-  rules?: unknown;
-  /** Field names this field depends on (for dependency-driven visibility/validation). */
-  dependencies?: string[];
-  /** Raw source text of the onDependenciesChange handler (arrow function or function expression). */
-  onDependenciesChange?: string;
-}
-
-export interface SchemaColumn {
-  fieldName: string;
-  title?: string;
-  componentType?: string;
-  options?: Record<string, unknown>;
-  width?: number | string;
-  minWidth?: number | string;
-  maxWidth?: number | string;
-  fixed?: string | boolean;
-  align?: string;
-  editable?: boolean | string;
 }
 
 export interface PageCodeInfo {
@@ -820,6 +797,66 @@ interface FileRoleMatch {
   servicesFile: string | undefined;
 }
 
+function findCandidateSchemaFiles(pageDir: string): string[] {
+  const candidates: string[] = [];
+  const ignoredNames = new Set([
+    'services.ts', 'services.tsx', 'service.ts', 'service.tsx',
+    'api.ts', 'api.tsx', 'types.ts', 'types.tsx',
+    'store.ts', 'store.tsx', 'auth.ts', 'auth.tsx',
+    'style.ts', 'style.tsx',
+  ]);
+
+  function walk(currentDir: string, depth: number) {
+    if (depth > 3) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(currentDir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
+      const fullPath = join(currentDir, entry);
+      let st: import('fs').Stats;
+      try {
+        st = statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        walk(fullPath, depth + 1);
+      } else if (st.isFile()) {
+        const ext = extname(entry);
+        if (ext !== '.ts' && ext !== '.tsx') continue;
+        if (ignoredNames.has(entry)) continue;
+        const content = tryReadFile(fullPath);
+        if (content && isSchemaContent(content)) {
+          candidates.push(fullPath);
+        }
+      }
+    }
+  }
+
+  walk(pageDir, 0);
+
+  // Prefer schema directories and files that look like form/grid schema.
+  return candidates.sort((a, b) => {
+    const score = (p: string) => {
+      const lower = p.toLowerCase();
+      let s = 0;
+      if (lower.includes('/schema/')) s += 20;
+      if (lower.includes('schema')) s += 10;
+      if (lower.includes('form')) s += 5;
+      if (lower.includes('grid')) s += 5;
+      if (lower.includes('search')) s += 3;
+      if (lower.endsWith('/index.ts') || lower.endsWith('/index.tsx')) s += 2;
+      return s;
+    };
+    return score(b) - score(a);
+  });
+}
+
 /**
  * Detect file roles by content patterns instead of hardcoded names.
  *
@@ -918,7 +955,7 @@ function tryReadFile(filePath: string): string | undefined {
  * Looks for exports named `searchSchema`, `gridSchema`, `columnSchema`, `formSchema`.
  */
 function isSchemaContent(content: string): boolean {
-  return /(?:export\s+)?(?:const|let|var)\s+(?:search|grid|column|form)[Ss]chema\b/.test(content);
+  return /(?:export\s+)?(?:const|let|var|function)\s+\w*(?:search|grid|column|form)[Ss]chema\b/i.test(content);
 }
 
 /**
@@ -1255,6 +1292,10 @@ export async function scanPageDir(
     pathAliases?: Record<string, string>;
     route?: RouteMapping;
     labelMap?: Record<string, string>;
+    /** 是否启用 LLM fallback 提取动态 schema */
+    enableLlmFallback?: boolean;
+    /** LLM 客户端，未提供时不启用 fallback */
+    llmClient?: LlmClient;
   }
 ): Promise<PageCodeInfo> {
   const info: PageCodeInfo = {
@@ -1298,6 +1339,47 @@ export async function scanPageDir(
           // External schema exists but could not be parsed
         }
       }
+    }
+  }
+
+  // If still no schema file found, search recursively for dynamic schema files
+  // (e.g. detail pages with tabs where schema lives in base/schema/index.ts).
+  if (!info.schemaFilePath) {
+    const candidates = findCandidateSchemaFiles(pageDir);
+    if (candidates.length > 0) {
+      info.schemaFilePath = candidates[0];
+    }
+  }
+
+  // Infer page type early so that LLM fallback can use it as a hint.
+  info.pageType = inferPageType(info, options?.route);
+
+  // LLM fallback: when static extraction yields no fields/columns and the schema
+  // file contains dynamic schema functions, ask an LLM to extract the union of
+  // possible fields/columns. This is opt-in via enableLlmFallback.
+  if (
+    options?.enableLlmFallback &&
+    options?.llmClient &&
+    info.schemaFilePath &&
+    (info.fields.length === 0 || info.columns.length === 0)
+  ) {
+    try {
+      const dynamic = await extractDynamicSchema({
+        schemaFile: info.schemaFilePath,
+        pageType: info.pageType,
+        client: options.llmClient,
+      });
+      if (dynamic.fields.length > 0) {
+        info.fields.push(...dynamic.fields);
+      }
+      if (dynamic.columns.length > 0) {
+        info.columns.push(...dynamic.columns);
+      }
+      if (dynamic.notes.length > 0) {
+        info.notes = [...(info.notes ?? []), ...dynamic.notes];
+      }
+    } catch {
+      // LLM fallback is best-effort; keep deterministic results on failure.
     }
   }
 
@@ -1368,9 +1450,6 @@ export async function scanPageDir(
       }
     }
   }
-
-  // Infer page type from code structure
-  info.pageType = inferPageType(info, options?.route);
 
   return info;
 }

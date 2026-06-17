@@ -42,5 +42,8 @@
     "claude-code"
   ],
   "author": "陈文彬",
-  "license": "MIT"
+  "license": "MIT",
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3"]
+  }
 }
